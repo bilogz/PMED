@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 260" role="img" aria-labelledby="title desc">
+  <title id="title">BCP Clinic Logo</title>
+  <desc id="desc">Bestlink College of the Philippines shield used as the BCP Clinic logo.</desc>
+  <defs>
+    <path id="shieldShape" d="M130 8 L226 8 L226 168 C226 195 213 219 186 237 L130 252 L74 237 C47 219 34 195 34 168 L34 8 Z" />
+    <clipPath id="shieldClip">
+      <use href="#shieldShape" />
+    </clipPath>
+    <linearGradient id="fieldBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#15a6f0" />
+      <stop offset="100%" stop-color="#0f79d0" />
+    </linearGradient>
+  </defs>
+
+  <use href="#shieldShape" fill="#0b2b9f" stroke="#ef3a37" stroke-width="4" />
+
+  <g clip-path="url(#shieldClip)">
+    <rect x="54" y="14" width="152" height="224" rx="2" fill="url(#fieldBlue)" />
+    <rect x="34" y="8" width="34" height="230" fill="#1c208d" />
+    <rect x="192" y="8" width="34" height="230" fill="#1c208d" />
+
+    <polygon points="122,8 226,8 226,66 168,66" fill="#ffffff" />
+    <line x1="121" y1="8" x2="188" y2="66" stroke="#ef3a37" stroke-width="3.5" />
+
+    <ellipse cx="130" cy="122" rx="53" ry="38" fill="#dfe3ea" opacity="0.95" />
+    <ellipse cx="130" cy="122" rx="28" ry="28" fill="#22228d" stroke="#d8d8ff" stroke-width="3" />
+    <ellipse cx="130" cy="122" rx="18" ry="18" fill="#13a8ef" />
+    <circle cx="113" cy="130" r="7" fill="#ef4038" stroke="#f9f0ef" stroke-width="2.5" />
+    <path d="M108 131 C132 108, 163 99, 197 91" fill="none" stroke="#ef4038" stroke-width="10" stroke-linecap="round" />
+    <path d="M108 131 C140 142, 170 145, 202 138" fill="none" stroke="#ef4038" stroke-width="10" stroke-linecap="round" />
+    <path d="M118 128 C148 76, 165 78, 185 121" fill="none" stroke="#d8dfe6" stroke-width="9" stroke-linecap="round" />
+    <path d="M122 133 C155 164, 173 163, 190 118" fill="none" stroke="#d8dfe6" stroke-width="9" stroke-linecap="round" />
+  </g>
+
+  <text x="130" y="40" fill="#1c208d" font-family="Arial, sans-serif" font-size="14" font-weight="700" text-anchor="middle" transform="rotate(33 130 40)">2002</text>
+  <text x="53" y="162" fill="#ffffff" font-family="Arial, sans-serif" font-size="10.5" font-weight="700" letter-spacing="1.1" text-anchor="middle" transform="rotate(90 53 162)">BESTLINK COLLEGE OF</text>
+  <text x="206" y="166" fill="#ffffff" font-family="Arial, sans-serif" font-size="11.5" font-weight="700" letter-spacing="1.1" text-anchor="middle" transform="rotate(-90 206 166)">THE PHILIPPINES</text>
+</svg>
