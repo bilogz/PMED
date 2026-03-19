@@ -223,17 +223,17 @@ function cashier_request_clearance(PDO $pdo, array $payload): array
             department_key, department_name, stage_order, status, remarks, approver_name,
             approver_role, external_reference, requested_by, metadata
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-            patient_id = VALUES(patient_id),
-            patient_code = VALUES(patient_code),
-            patient_name = VALUES(patient_name),
-            patient_type = VALUES(patient_type),
-            remarks = VALUES(remarks),
-            approver_name = VALUES(approver_name),
-            approver_role = VALUES(approver_role),
-            external_reference = VALUES(external_reference),
-            requested_by = VALUES(requested_by),
-            metadata = VALUES(metadata),
+         ON CONFLICT (clearance_reference) DO UPDATE SET
+            patient_id = EXCLUDED.patient_id,
+            patient_code = EXCLUDED.patient_code,
+            patient_name = EXCLUDED.patient_name,
+            patient_type = EXCLUDED.patient_type,
+            remarks = EXCLUDED.remarks,
+            approver_name = EXCLUDED.approver_name,
+            approver_role = EXCLUDED.approver_role,
+            external_reference = EXCLUDED.external_reference,
+            requested_by = EXCLUDED.requested_by,
+            metadata = EXCLUDED.metadata,
             updated_at = CURRENT_TIMESTAMP'
     );
 

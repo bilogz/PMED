@@ -1,6 +1,6 @@
 ﻿<template>
   <div class="logo">
-    <RouterLink to="/dashboard/default" class="logo-link">
+    <RouterLink to="/pmed/dashboard" class="logo-link">
       <img :src="bcpClinicLogo" alt="BCP Clinic" class="logo-image" />
     </RouterLink>
   </div>

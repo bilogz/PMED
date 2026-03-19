@@ -1,18 +1,14 @@
 import {
-  mdiAccountGroupOutline,
-  mdiAccountHeartOutline,
   mdiAccountOutline,
-  mdiCogOutline,
+  mdiArrowDecisionOutline,
   mdiCalendarClockOutline,
-  mdiCashRegister,
   mdiChartLine,
   mdiClipboardTextOutline,
-  mdiFlaskOutline,
+  mdiCogOutline,
+  mdiDatabaseOutline,
+  mdiFileChartOutline,
   mdiLogout,
-  mdiPill,
-  mdiStethoscope,
-  mdiViewDashboardOutline,
-  mdiWalk
+  mdiViewDashboardOutline
 } from '@mdi/js';
 
 export interface menu {
@@ -33,66 +29,46 @@ export interface menu {
 }
 
 const sidebarItem: menu[] = [
-  { header: 'Clinic System' },
+  { header: 'PMED SYSTEM' },
   {
     title: 'Dashboard',
     icon: mdiViewDashboardOutline,
-    to: '/dashboard/default'
+    to: '/pmed/dashboard'
   },
   { divider: true },
-  { header: 'Appointment Workflow' },
+  { header: 'PMED MODULES' },
   {
-    title: 'Appointments',
+    title: 'Planning',
     icon: mdiCalendarClockOutline,
-    to: '/appointments'
+    to: '/pmed/planning'
   },
   {
-    title: 'Patients Database',
-    icon: mdiAccountGroupOutline,
-    to: '/modules/patients'
+    title: 'Data Collection',
+    icon: mdiDatabaseOutline,
+    to: '/pmed/data-collection'
   },
   {
-    title: 'Registration (Patient Management)',
-    icon: mdiClipboardTextOutline,
-    to: '/modules/registration'
-  },
-  {
-    title: 'Walk-In',
-    icon: mdiWalk,
-    to: '/modules/walk-in'
-  },
-  {
-    title: 'Check-Up',
-    icon: mdiStethoscope,
-    to: '/modules/check-up'
-  },
-  {
-    title: 'Laboratory',
-    icon: mdiFlaskOutline,
-    to: '/modules/laboratory'
-  },
-  {
-    title: 'Pharmacy & Inventory',
-    icon: mdiPill,
-    to: '/modules/pharmacy'
-  },
-  {
-    title: 'Mental Health & Addiction',
-    icon: mdiAccountHeartOutline,
-    to: '/modules/mental-health'
-  },
-  {
-    title: 'Reports',
+    title: 'Monitoring',
     icon: mdiChartLine,
-    to: '/modules/reports'
+    to: '/pmed/monitoring'
   },
   {
-    title: 'Cashier Integration',
-    icon: mdiCashRegister,
-    to: '/modules/cashier'
+    title: 'Evaluation',
+    icon: mdiClipboardTextOutline,
+    to: '/pmed/evaluation'
+  },
+  {
+    title: 'Reporting',
+    icon: mdiFileChartOutline,
+    to: '/pmed/reporting'
+  },
+  {
+    title: 'Exchange Board',
+    icon: mdiArrowDecisionOutline,
+    to: '/pmed/exchange-board'
   },
   { divider: true },
-  { header: 'Account' },
+  { header: 'SYSTEM' },
   {
     title: 'My Profile',
     icon: mdiAccountOutline,

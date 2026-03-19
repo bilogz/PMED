@@ -2,12 +2,25 @@
 
 return [
     'database' => [
-        'host' => '127.0.0.1',
-        'port' => 3306,
-        'database' => 'clinic_system',
-        'username' => 'root',
+        // Supabase / PostgreSQL only
+        // Prefer `database_url` (same as Supabase `DATABASE_URL`).
+        'database_url' => '',
+        'host' => 'db.your-project.supabase.co',
+        'port' => 5432,
+        'database' => 'postgres',
+        'username' => 'postgres',
         'password' => '',
-        'charset' => 'utf8mb4',
+        'supabase' => [
+            'project_url' => 'https://your-project.supabase.co',
+            'anon_key' => '',
+            'service_role_key' => '',
+            'db_host' => 'db.your-project.supabase.co',
+            'db_port' => 5432,
+            'db_name' => 'postgres',
+            'db_user' => 'postgres',
+            'db_password' => '',
+            'sslmode' => 'require',
+        ],
     ],
     'clinic_system' => [
         'base_url' => 'http://localhost:5173',

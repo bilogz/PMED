@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useCustomizerStore } from '../../../stores/customizer';
 import { useAuthStore } from '@/stores/auth';
+import { formatDateTimeWithTimezone } from '@/utils/dateTime';
 // Icon Imports
 import { BellIcon, SettingsIcon, SearchIcon, Menu2Icon, ClockIcon, TemperatureIcon } from 'vue-tabler-icons';
 
@@ -33,12 +34,7 @@ const userInitials = computed(() => {
 
 function updateClock(): void {
   const now = new Date();
-  const formatted = new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(now);
-  clockText.value = formatted;
+  clockText.value = formatDateTimeWithTimezone(now, { weekday: 'short' });
 }
 
 async function fetchTemperature(lat: number, lon: number): Promise<void> {

@@ -224,13 +224,13 @@ final class CashierBillingIntegrationService
                     source_module, source_key, cashier_reference, cashier_billing_id, amount_due, amount_paid, balance_due,
                     payment_status, latest_payment_method, metadata
                 ) VALUES (?, ?, ?, ?, ?, 0.00, ?, 'unpaid', NULL, ?)
-                ON DUPLICATE KEY UPDATE
-                    cashier_reference = VALUES(cashier_reference),
-                    cashier_billing_id = VALUES(cashier_billing_id),
-                    amount_due = VALUES(amount_due),
-                    balance_due = VALUES(balance_due),
-                    payment_status = VALUES(payment_status),
-                    metadata = VALUES(metadata)"
+                ON CONFLICT (source_module, source_key) DO UPDATE SET
+                    cashier_reference = EXCLUDED.cashier_reference,
+                    cashier_billing_id = EXCLUDED.cashier_billing_id,
+                    amount_due = EXCLUDED.amount_due,
+                    balance_due = EXCLUDED.balance_due,
+                    payment_status = EXCLUDED.payment_status,
+                    metadata = EXCLUDED.metadata"
             )->execute([
                 (string) $payload['source_module'],
                 (string) $payload['source_id'],
@@ -321,6 +321,8 @@ final class CashierBillingIntegrationService
 
     private function ensureIntegrationTables(): void
     {
+        // Supabase-only: schema migrations live under `supabase/schema.sql`.
+        return;
         $this->pdo->exec(
             "CREATE TABLE IF NOT EXISTS clinic_cashier_sync_logs (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -472,8 +474,9 @@ final class CashierBillingIntegrationService
     {
         if (!isset($this->tableColumnCache[$tableName])) {
             try {
-                $statement = $this->pdo->query('SHOW COLUMNS FROM `' . str_replace('`', '``', $tableName) . '`');
-                $columns = $statement ? $statement->fetchAll(PDO::FETCH_COLUMN) : [];
+                $statement = $this->pdo->prepare("SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ?");
+                $statement->execute([$tableName]);
+                $columns = $statement->fetchAll(PDO::FETCH_COLUMN);
                 $this->tableColumnCache[$tableName] = array_map('strtolower', array_map('strval', $columns));
             } catch (Throwable $error) {
                 $this->tableColumnCache[$tableName] = [];

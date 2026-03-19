@@ -1,6 +1,6 @@
 <template>
   <div class="logo-main">
-    <RouterLink to="/dashboard/default" class="logo-main-link">
+    <RouterLink to="/pmed/dashboard" class="logo-main-link">
       <img :src="bcpShield" alt="BCP Clinic" class="logo-main-icon" />
       <div v-if="!customizer.mini_sidebar" class="logo-main-text">
         <div class="logo-main-title">Bestlink College</div>

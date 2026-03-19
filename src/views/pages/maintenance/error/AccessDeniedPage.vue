@@ -12,7 +12,7 @@ const auth = useAuthStore();
       <p class="text-medium-emphasis mb-6">Your account does not have permission to access this module.</p>
       <div class="d-flex justify-center ga-2">
         <v-btn color="primary" variant="flat" :to="auth.defaultRouteForUser(auth.user)">Go to Allowed Module</v-btn>
-        <v-btn color="secondary" variant="outlined" to="/dashboard/default">Dashboard</v-btn>
+        <v-btn color="secondary" variant="outlined" to="/pmed/dashboard">Dashboard</v-btn>
       </div>
     </v-card>
   </v-container>

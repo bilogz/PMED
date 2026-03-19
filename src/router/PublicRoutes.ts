@@ -17,7 +17,7 @@ const PublicRoutes = {
     },
     {
       path: '/',
-      redirect: '/student/'
+      redirect: '/admin/login'
     },
     {
       path: '/student',
@@ -25,7 +25,7 @@ const PublicRoutes = {
     },
     {
       path: '/admin',
-      redirect: '/student/'
+      redirect: '/admin/login'
     },
     {
       path: '/patient',

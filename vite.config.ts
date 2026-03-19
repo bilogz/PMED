@@ -2,33 +2,15 @@ import vue from '@vitejs/plugin-vue';
 import { fileURLToPath, URL } from 'url';
 import { defineConfig, loadEnv } from 'vite';
 import vuetify from 'vite-plugin-vuetify';
-import { mysqlCompatibilityApiPlugin } from './server/mysqlCompatibilityApi.js';
-
-function normalizePathPrefix(value: string): string {
-  if (!value) return '';
-  const withLeadingSlash = value.startsWith('/') ? value : `/${value}`;
-  return withLeadingSlash.replace(/\/+$/, '');
-}
+import { supabaseApiPlugin } from './server/supabaseApi.js';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const devProxyTarget = env.VITE_DEV_PROXY_TARGET || 'http://localhost';
-  const devBackendRoot = normalizePathPrefix(env.VITE_DEV_BACKEND_ROOT || '/Clinic%20System');
 
   return {
     plugins: [
-      mysqlCompatibilityApiPlugin({
-        dbClient: 'mysql',
-        host: env.MYSQL_HOST,
-        port: env.MYSQL_PORT,
-        database: env.MYSQL_DATABASE,
-        user: env.MYSQL_USER,
-        password: env.MYSQL_PASSWORD,
-        cashierEnabled: env.CASHIER_INTEGRATION_ENABLED,
-        cashierBaseUrl: env.CASHIER_SYSTEM_BASE_URL,
-        cashierSharedToken: env.CASHIER_SHARED_TOKEN,
-        cashierSyncMode: env.CASHIER_SYNC_MODE,
-        cashierInboundPath: env.CASHIER_SYSTEM_INBOUND_PATH
+      supabaseApiPlugin({
+        databaseUrl: env.DATABASE_URL || env.SUPABASE_DATABASE_URL
       }),
       vue({
         template: {
@@ -50,15 +32,6 @@ export default defineConfig(({ mode }) => {
     css: {
       preprocessorOptions: {
         scss: {}
-      }
-    },
-    server: {
-      proxy: {
-        '/backend': {
-          target: devProxyTarget,
-          changeOrigin: true,
-          rewrite: (path) => `${devBackendRoot}${path}`
-        }
       }
     },
     build: {

@@ -26,14 +26,27 @@ function integration_db_config(): array
 {
     $config = load_integration_config();
     $dbConfig = is_array($config['database'] ?? null) ? $config['database'] : [];
+    $supabaseConfig = is_array($dbConfig['supabase'] ?? null) ? $dbConfig['supabase'] : [];
 
     return [
-        'host' => (string) ($dbConfig['host'] ?? '127.0.0.1'),
-        'port' => (int) ($dbConfig['port'] ?? 3306),
-        'database' => (string) ($dbConfig['database'] ?? ''),
-        'username' => (string) ($dbConfig['username'] ?? 'root'),
+        // Supabase / PostgreSQL only
+        'database_url' => (string) ($dbConfig['database_url'] ?? ''),
+        'host' => (string) ($dbConfig['host'] ?? 'db.your-project-ref.supabase.co'),
+        'port' => (int) ($dbConfig['port'] ?? 5432),
+        'database' => (string) ($dbConfig['database'] ?? 'postgres'),
+        'username' => (string) ($dbConfig['username'] ?? 'postgres'),
         'password' => (string) ($dbConfig['password'] ?? ''),
-        'charset' => (string) ($dbConfig['charset'] ?? 'utf8mb4'),
+        'supabase' => [
+            'project_url' => (string) ($supabaseConfig['project_url'] ?? ''),
+            'anon_key' => (string) ($supabaseConfig['anon_key'] ?? ''),
+            'service_role_key' => (string) ($supabaseConfig['service_role_key'] ?? ''),
+            'db_host' => (string) ($supabaseConfig['db_host'] ?? ''),
+            'db_port' => (int) ($supabaseConfig['db_port'] ?? 5432),
+            'db_name' => (string) ($supabaseConfig['db_name'] ?? ''),
+            'db_user' => (string) ($supabaseConfig['db_user'] ?? ''),
+            'db_password' => (string) ($supabaseConfig['db_password'] ?? ''),
+            'sslmode' => (string) ($supabaseConfig['sslmode'] ?? 'require'),
+        ],
     ];
 }
 
@@ -46,26 +59,49 @@ function integration_db_connection(): PDO
     }
 
     $dbConfig = integration_db_config();
-    if ($dbConfig['database'] === '') {
-        throw new RuntimeException('MYSQL_DATABASE is not configured for the integration PHP files.');
+
+    $databaseUrl = (string) (getenv('DATABASE_URL') ?: getenv('SUPABASE_DATABASE_URL') ?: ($dbConfig['database_url'] ?? ''));
+    $sslmode = (string) ($dbConfig['supabase']['sslmode'] ?? 'require');
+
+    $host = (string) ($dbConfig['supabase']['db_host'] ?? '') ?: (string) ($dbConfig['host'] ?? '');
+    $port = (int) (($dbConfig['supabase']['db_port'] ?? 5432) ?: ($dbConfig['port'] ?? 5432));
+    $database = (string) ($dbConfig['supabase']['db_name'] ?? '') ?: (string) ($dbConfig['database'] ?? 'postgres');
+    $username = (string) ($dbConfig['supabase']['db_user'] ?? '') ?: (string) ($dbConfig['username'] ?? 'postgres');
+    $password = (string) ($dbConfig['supabase']['db_password'] ?? '') ?: (string) ($dbConfig['password'] ?? '');
+
+    if ($databaseUrl !== '') {
+        $parts = parse_url($databaseUrl);
+        if (is_array($parts)) {
+            $host = (string) ($parts['host'] ?? $host);
+            $port = (int) ($parts['port'] ?? $port);
+            $database = ltrim((string) ($parts['path'] ?? $database), '/');
+            $username = (string) ($parts['user'] ?? $username);
+            if (array_key_exists('pass', $parts)) {
+                $password = (string) ($parts['pass'] ?? '');
+            }
+            if (!empty($parts['query'])) {
+                parse_str((string) $parts['query'], $query);
+                if (is_array($query) && isset($query['sslmode']) && trim((string) $query['sslmode']) !== '') {
+                    $sslmode = (string) $query['sslmode'];
+                }
+            }
+        }
     }
 
-    $dsn = sprintf(
-        'mysql:host=%s;port=%d;dbname=%s;charset=%s',
-        $dbConfig['host'],
-        $dbConfig['port'],
-        $dbConfig['database'],
-        $dbConfig['charset']
-    );
+    if ($host === '' || $database === '' || $username === '') {
+        throw new RuntimeException('Supabase database settings are not configured for the PHP bridge.');
+    }
+
+    $dsn = sprintf('pgsql:host=%s;port=%d;dbname=%s;sslmode=%s', $host, $port, $database, $sslmode);
 
     try {
-        $pdo = new PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
+        $pdo = new PDO($dsn, $username, $password, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES => false,
         ]);
     } catch (PDOException $exception) {
-        throw new RuntimeException('Unable to connect to the MySQL database: ' . $exception->getMessage(), 0, $exception);
+        throw new RuntimeException('Unable to connect to the Supabase (PostgreSQL) database: ' . $exception->getMessage(), 0, $exception);
     }
 
     return $pdo;

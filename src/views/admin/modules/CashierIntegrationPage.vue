@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import AnalyticsCardGrid from '@/components/shared/AnalyticsCardGrid.vue';
 import ModuleActivityLogs from '@/components/shared/ModuleActivityLogs.vue';
 import { useRealtimeListSync } from '@/composables/useRealtimeListSync';
@@ -53,6 +54,21 @@ const queueSyncFilter = ref<QueueSyncFilter>('all');
 const clearanceStatusFilter = ref<ClearanceStatusFilter>('all');
 const clearanceSearch = ref('');
 const activeTab = ref<'queue' | 'clearance' | 'payments'>('queue');
+const route = useRoute();
+
+function resolveActiveTab(meta: unknown): 'queue' | 'clearance' | 'payments' {
+  const value = String(meta || '').trim().toLowerCase();
+  if (value === 'clearance' || value === 'payments' || value === 'queue') return value;
+  return 'queue';
+}
+
+watch(
+  () => route.path,
+  () => {
+    activeTab.value = resolveActiveTab((route.meta as Record<string, unknown> | undefined)?.cashierTab);
+  },
+  { immediate: true }
+);
 
 const status = ref<CashierIntegrationStatus | null>(null);
 const queueItems = ref<CashierIntegrationQueueItem[]>([]);
@@ -429,11 +445,7 @@ onUnmounted(() => {
             </v-chip>
             <v-chip color="info" variant="tonal" size="large">
               Sync mode: {{ status?.syncMode || 'queue' }}
-            </v-chip>
-            <v-btn class="saas-btn saas-btn-light" prepend-icon="mdi-refresh" :loading="refreshing" @click="loadDashboard({ silent: true })">
-              Refresh
-            </v-btn>
-            <v-btn class="saas-btn saas-btn-primary" prepend-icon="mdi-send-outline" @click="dispatchQueue">
+            </v-chip>            <v-btn class="saas-btn saas-btn-primary" prepend-icon="mdi-send-outline" @click="dispatchQueue">
               Dispatch Pending
             </v-btn>
           </div>
@@ -453,7 +465,7 @@ onUnmounted(() => {
               <div class="readiness-tile">
                 <span class="readiness-label">Cashier Endpoint</span>
                 <strong>{{ status?.baseUrl || 'Not configured' }}</strong>
-                <span class="text-medium-emphasis">{{ status?.inboundPath || '/api/integrations/clinic-events' }}</span>
+                <span class="text-medium-emphasis">{{ status?.inboundPath || '/api/integrations/events' }}</span>
               </div>
               <div class="readiness-tile">
                 <span class="readiness-label">Queue Totals</span>
@@ -1020,3 +1032,4 @@ onUnmounted(() => {
   }
 }
 </style>
+

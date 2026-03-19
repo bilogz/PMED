@@ -1,0 +1,137 @@
+.pmed-page {
+  padding-bottom: 24px;
+}
+
+.hero-card,
+.surface-card,
+.flow-card {
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.hero-wrap {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.hero-card {
+  background: linear-gradient(90deg, #29459d 0%, #3f67c3 52%, #56a3ee 100%);
+  box-shadow: 0 18px 30px rgba(28, 58, 143, 0.2);
+}
+
+.hero-card :deep(.text-medium-emphasis) {
+  color: rgba(255, 255, 255, 0.82) !important;
+}
+
+.hero-card :deep(h1) {
+  color: #fff;
+}
+
+.page-kicker {
+  display: inline-flex;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.hero-actions :deep(.v-btn) {
+  border-radius: 999px;
+}
+
+.action-panel {
+  border-radius: 16px;
+}
+
+.action-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.action-stack :deep(.v-btn) {
+  justify-content: flex-start;
+  border-radius: 12px;
+}
+
+.workflow-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.workflow-step {
+  padding: 12px;
+  border: 1px solid rgba(30, 136, 229, 0.12);
+  border-radius: 12px;
+  background: #fbfdff;
+}
+
+.workflow-step.active {
+  border-color: rgba(30, 136, 229, 0.32);
+  box-shadow: 0 10px 20px rgba(30, 136, 229, 0.08);
+}
+
+.workflow-step.locked {
+  opacity: 0.55;
+}
+
+.records-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.saas-table :deep(th) {
+  white-space: nowrap;
+  color: rgba(0, 0, 0, 0.66);
+}
+
+.info-card {
+  height: 100%;
+  padding: 14px;
+  border: 1px solid rgba(30, 136, 229, 0.12);
+  border-radius: 12px;
+  background: #fbfdff;
+}
+
+.highlight-card {
+  min-height: 124px;
+}
+
+.kanban-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.kanban-card {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(30, 136, 229, 0.12);
+  background: #fbfdff;
+}
+
+@media (max-width: 960px) {
+  .hero-actions {
+    justify-content: flex-start;
+  }
+}

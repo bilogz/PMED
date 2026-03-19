@@ -1,70 +1,104 @@
+const PMED_ROUTES = [
+  {
+    name: 'PMED Dashboard',
+    path: '/pmed/dashboard',
+    component: () => import('@/views/dashboards/default/DefaultDashboard.vue')
+  },
+  {
+    path: '/pmed',
+    redirect: '/pmed/dashboard'
+  },
+  {
+    name: 'PMED Planning',
+    path: '/pmed/planning',
+    component: () => import('@/views/pmed/PlanningPage.vue'),
+    meta: {
+      title: 'Planning',
+      subtitle: 'What will we do?',
+      description: 'Plan activities, schedules, targets, stakeholders, and resources for the PMED workflow.'
+    }
+  },
+  {
+    name: 'PMED Data Collection',
+    path: '/pmed/data-collection',
+    component: () => import('@/views/pmed/DataCollectionPage.vue'),
+    meta: {
+      title: 'Data Collection',
+      subtitle: 'What happened?',
+      description: 'Capture clinic activity outputs, forms, attendance/logs, and supporting records for PMED.'
+    }
+  },
+  {
+    name: 'PMED Monitoring',
+    path: '/pmed/monitoring',
+    component: () => import('@/views/pmed/MonitoringPage.vue'),
+    meta: {
+      title: 'Monitoring',
+      subtitle: 'Are we on track?',
+      description: 'Track progress, review statuses, and surface issues that may block PMED execution.'
+    }
+  },
+  {
+    name: 'PMED Evaluation',
+    path: '/pmed/evaluation',
+    component: () => import('@/views/pmed/EvaluationPage.vue'),
+    meta: {
+      title: 'Evaluation',
+      subtitle: 'Did we succeed?',
+      description: 'Compare targets vs actuals and summarize outcomes for PMED activities.'
+    }
+  },
+  {
+    name: 'PMED Reporting',
+    path: '/pmed/reporting',
+    component: () => import('@/views/pmed/ReportingPage.vue'),
+    meta: {
+      title: 'Reporting',
+      subtitle: 'What are the results?',
+      description: 'Generate summary/final reports and stakeholder-ready outputs for the PMED workflow.'
+    }
+  },
+  {
+    name: 'PMED Exchange Board',
+    path: '/pmed/exchange-board',
+    component: () => import('@/views/pmed/ExchangeBoardPage.vue'),
+    meta: {
+      title: 'Exchange Board',
+      subtitle: 'Who is sending what?',
+      description: 'Monitor inbound and outbound PMED exchanges across connected departments from one workspace.'
+    }
+  },
+  {
+    path: '/pmed/:pmedModule(planning|data-collection|monitoring|evaluation|reporting|exchange-board)/:pathMatch(.*)*',
+    redirect: (to: any) => `/pmed/${String(to.params.pmedModule || 'planning')}`
+  },
+  {
+    path: '/pmed/:pathMatch(.*)*',
+    redirect: '/pmed/planning'
+  }
+];
+
 const MainRoutes = {
   path: '/main',
   meta: {
     requiresAuth: true
   },
-  redirect: '/dashboard/default',
+  redirect: '/pmed/dashboard',
   component: () => import('@/layouts/full/FullLayout.vue'),
   children: [
     {
-      name: 'Default',
-      path: '/dashboard/default',
-      component: () => import('@/views/dashboards/default/DefaultDashboard.vue')
+      path: '/cashier/:pathMatch(.*)*',
+      redirect: '/pmed/dashboard'
     },
     {
-      name: 'Patients Database',
-      path: '/modules/patients',
-      component: () => import('@/views/admin/modules/PatientsDatabasePage.vue')
-    },
-    {
-      name: 'Registration',
-      path: '/modules/registration',
-      component: () => import('@/views/admin/modules/RegistrationPage.vue')
-    },
-    {
-      name: 'Walk-In',
-      path: '/modules/walk-in',
-      component: () => import('@/views/admin/modules/WalkInPage.vue')
-    },
-    {
-      name: 'Check-Up',
-      path: '/modules/check-up',
-      component: () => import('@/views/admin/modules/CheckUpPage.vue')
-    },
-    {
-      name: 'Laboratory',
-      path: '/modules/laboratory',
-      component: () => import('@/views/admin/modules/LaboratoryPage.vue')
-    },
-    {
-      name: 'Pharmacy',
-      path: '/modules/pharmacy',
-      component: () => import('@/views/admin/modules/PharmacyInventoryPage.vue')
-    },
-    {
-      name: 'Mental Health & Addiction',
-      path: '/modules/mental-health',
-      component: () => import('@/views/admin/modules/MentalHealthAddictionPage.vue')
-    },
-    {
-      name: 'Reports',
-      path: '/modules/reports',
-      component: () => import('@/views/admin/modules/ReportsPage.vue')
-    },
-    {
-      name: 'Cashier Integration',
       path: '/modules/cashier',
-      component: () => import('@/views/admin/modules/CashierIntegrationPage.vue')
+      redirect: '/pmed/dashboard'
     },
+    ...PMED_ROUTES,
     {
       name: 'My Profile',
       path: '/profile',
       component: () => import('@/views/profile/MyProfilePage.vue')
-    },
-    {
-      name: 'Appointments',
-      path: '/appointments',
-      component: () => import('@/views/appointments/AppointmentsPage.vue')
     }
   ]
 };

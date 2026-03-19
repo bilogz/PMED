@@ -205,7 +205,7 @@ Live callback flow:
 - `backend/integrations/sync_billable_to_cashier.php`
 - `backend/integrations/poll_cashier_billing_status.php`
 - `backend/integrations/receive_cashier_payment_callback.php`
-- `database/mysql/clinic_cashier_integration.sql`
+- `supabase/schema.sql`
 
 Recommended clinic-side usage:
 
