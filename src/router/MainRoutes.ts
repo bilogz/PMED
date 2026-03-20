@@ -59,6 +59,16 @@ const PMED_ROUTES = [
     }
   },
   {
+    name: 'PMED Enrollment Statistics',
+    path: '/pmed/enrollment-statistics',
+    component: () => import('@/views/pmed/EnrollmentStatisticsPage.vue'),
+    meta: {
+      title: 'Enrollment Statistics',
+      subtitle: 'What is Registrar sending?',
+      description: 'Review registrar enrollment metrics delivered into PMED through the shared statistics feed.'
+    }
+  },
+  {
     name: 'PMED Exchange Board',
     path: '/pmed/exchange-board',
     component: () => import('@/views/pmed/ExchangeBoardPage.vue'),
@@ -69,7 +79,7 @@ const PMED_ROUTES = [
     }
   },
   {
-    path: '/pmed/:pmedModule(planning|data-collection|monitoring|evaluation|reporting|exchange-board)/:pathMatch(.*)*',
+    path: '/pmed/:pmedModule(planning|data-collection|monitoring|evaluation|reporting|enrollment-statistics|exchange-board)/:pathMatch(.*)*',
     redirect: (to: any) => `/pmed/${String(to.params.pmedModule || 'planning')}`
   },
   {

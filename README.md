@@ -41,6 +41,10 @@ Open:
 
 - `admin@pmed.local` / `Admin#123`
 
+## Demo account summary
+
+- Admin: `admin@pmed.local` / `Admin#123`
+
 ## What to test
 
 - PMED dashboard: `http://localhost:5173/pmed/dashboard`

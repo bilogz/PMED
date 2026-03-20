@@ -48,6 +48,16 @@ try {
             ]);
         }
 
+        if ($action === 'submit_report') {
+            $data = $client->submitReportToPmed($department, $payload);
+            json_response([
+                'ok' => true,
+                'department' => $department,
+                'message' => 'Department report submitted to PMED.',
+                'data' => $data,
+            ]);
+        }
+
         $data = $client->submitDecision($department, $payload);
         json_response([
             'ok' => true,

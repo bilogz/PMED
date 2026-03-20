@@ -388,6 +388,138 @@ async function insertModuleActivity(
   );
 }
 
+async function ensurePmedEnrollmentStatisticsFeedTable(pool: Pool): Promise<void> {
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS public.pmed_enrollment_statistics_feed (
+       id TEXT PRIMARY KEY,
+       batch_id TEXT,
+       source TEXT,
+       office TEXT,
+       metric TEXT,
+       current_value INTEGER NOT NULL DEFAULT 0,
+       report_type TEXT,
+       payload JSONB,
+       sent_at TIMESTAMPTZ,
+       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+     )`
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_pmed_enrollment_statistics_feed_batch_id
+     ON public.pmed_enrollment_statistics_feed (batch_id)`
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_pmed_enrollment_statistics_feed_sent_at
+     ON public.pmed_enrollment_statistics_feed (sent_at DESC)`
+  );
+}
+
+async function resolvePmedEnrollmentStatisticsRelation(pool: Pool, ensureExists = false): Promise<string> {
+  if (await relationExists(pool, 'public.pmed_enrollment_statistics_feed')) {
+    return 'public.pmed_enrollment_statistics_feed';
+  }
+
+  if (await relationExists(pool, 'pmed.pmed_enrollment_statistics_feed')) {
+    return 'pmed.pmed_enrollment_statistics_feed';
+  }
+
+  if (ensureExists) {
+    await ensurePmedEnrollmentStatisticsFeedTable(pool);
+    return 'public.pmed_enrollment_statistics_feed';
+  }
+
+  return '';
+}
+
+type EnrollmentStatisticFeedWriteRow = {
+  id: string;
+  batchId: string;
+  source: string;
+  office: string;
+  metric: string;
+  currentValue: number;
+  reportType: string;
+  payload: JsonRecord;
+  sentAt: string;
+};
+
+function normalizeEnrollmentStatisticLabel(value: string): string {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function buildEnrollmentStatisticsFeedRows(body: JsonRecord): EnrollmentStatisticFeedWriteRow[] {
+  const source = toSafeText(body.source) || 'Registrar';
+  const office = toSafeText(body.office) || source;
+  const sentAt = toSafeText(body.sent_at) || new Date().toISOString();
+  const reportType = toSafeText(body.report_type) || 'enrollment_statistics';
+  const payloadRoot =
+    body.data && typeof body.data === 'object' && !Array.isArray(body.data)
+      ? (body.data as JsonRecord)
+      : {};
+  const explicitBatchId =
+    toSafeText(body.batch_id) ||
+    toSafeText(payloadRoot.batch_id) ||
+    `PMED-ENROLL-${sentAt.replace(/[^0-9]/g, '').slice(0, 14) || Date.now()}`;
+
+  const recordCandidates = Array.isArray(body.records)
+    ? body.records
+    : Array.isArray(payloadRoot.records)
+      ? payloadRoot.records
+      : [];
+
+  if (recordCandidates.length > 0) {
+    return recordCandidates.map((candidate, index) => {
+      const record =
+        candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+          ? (candidate as JsonRecord)
+          : {};
+      const metricKey = toSafeText(record.metric) || `Metric ${index + 1}`;
+
+      return {
+        id: toSafeText(record.id) || `${explicitBatchId}:${metricKey.toLowerCase().replace(/\s+/g, '_')}`,
+        batchId: toSafeText(record.batch_id) || explicitBatchId,
+        source: toSafeText(record.source) || source,
+        office: toSafeText(record.office) || office,
+        metric: normalizeEnrollmentStatisticLabel(metricKey),
+        currentValue: toSafeInt(record.current_value ?? record.value, 0),
+        reportType: toSafeText(record.report_type) || reportType,
+        payload: {
+          ...payloadRoot,
+          ...record
+        },
+        sentAt: toSafeText(record.sent_at) || sentAt
+      };
+    });
+  }
+
+  const metricEntries = Object.entries(payloadRoot).filter(([key, value]) => {
+    if (key === 'records' || key === 'batch_id') return false;
+    if (typeof value === 'number') return true;
+    const normalized = toSafeText(value);
+    return normalized !== '' && /^-?\d+(\.\d+)?$/.test(normalized);
+  });
+
+  return metricEntries.map(([metricKey, value]) => ({
+    id: `${explicitBatchId}:${metricKey}`,
+    batchId: explicitBatchId,
+    source,
+    office,
+    metric: normalizeEnrollmentStatisticLabel(metricKey),
+    currentValue: toSafeInt(value, 0),
+    reportType,
+    payload: {
+      ...payloadRoot,
+      metric: metricKey,
+      current_value: toSafeInt(value, 0)
+    },
+    sentAt
+  }));
+}
+
 function cashierIntegrationEnabled(options: SupabaseApiOptions): boolean {
   return toSafeText(options.cashierEnabled).toLowerCase() === 'true';
 }
@@ -2156,7 +2288,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
         const pool = await getPool(options);
         const url = new URL(req.url || '', 'http://localhost');
 
-        if (!pool || !['/api/appointments', '/api/doctors', '/api/doctor-availability', '/api/registrations', '/api/walk-ins', '/api/checkups', '/api/laboratory', '/api/pharmacy', '/api/mental-health', '/api/patients', '/api/admin-auth', '/api/admin-profile', '/api/module-activity', '/api/reports', '/api/dashboard', '/api/pmed/planning', '/api/pmed/data-collection', '/api/pmed/monitoring', '/api/pmed/evaluation', '/api/pmed/reporting', '/api/pmed/exchange-board', '/api/integrations/cashier/status', '/api/integrations/cashier/queue', '/api/integrations/cashier/sync', '/api/integrations/cashier/payment-status', '/api/integrations/departments/map', '/api/integrations/departments/records'].includes(url.pathname)) {
+        if (!pool || !['/api/appointments', '/api/doctors', '/api/doctor-availability', '/api/registrations', '/api/walk-ins', '/api/checkups', '/api/laboratory', '/api/pharmacy', '/api/mental-health', '/api/patients', '/api/admin-auth', '/api/admin-profile', '/api/module-activity', '/api/reports', '/api/dashboard', '/api/pmed/planning', '/api/pmed/data-collection', '/api/pmed/monitoring', '/api/pmed/evaluation', '/api/pmed/reporting', '/api/pmed/enrollment-statistics', '/api/pmed/exchange-board', '/api/integrations/cashier/status', '/api/integrations/cashier/queue', '/api/integrations/cashier/sync', '/api/integrations/cashier/payment-status', '/api/integrations/departments/map', '/api/integrations/departments/records'].includes(url.pathname)) {
           next();
           return;
         }
@@ -4375,6 +4507,128 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
             }
           }
 
+          if (url.pathname === '/api/pmed/enrollment-statistics') {
+            const loadEnrollmentStatisticsWorkspace = async () => {
+              const statisticsRelation = await resolvePmedEnrollmentStatisticsRelation(pool);
+
+              if (!statisticsRelation) {
+                return {
+                  summary: {
+                    totalRecords: 0,
+                    totalValue: 0,
+                    activeBatches: 0,
+                    sourceCount: 0
+                  },
+                  records: [],
+                  availableSources: [],
+                  availableReportTypes: [],
+                  lastSentAt: ''
+                };
+              }
+
+              const [rows] = await pool.query<RowDataPacket[]>(
+                `SELECT id, batch_id, source, office, metric, current_value, report_type, payload, sent_at, created_at
+                 FROM ${statisticsRelation}
+                 ORDER BY COALESCE(sent_at, created_at) DESC, id DESC`
+              );
+
+              const records = rows.map((row, index) => ({
+                id: toSafeText(row.id || row.batch_id || `PMED-ENROLLMENT-${index + 1}`),
+                batchId: toSafeText(row.batch_id),
+                source: toSafeText(row.source),
+                office: toSafeText(row.office),
+                metric: toSafeText(row.metric),
+                currentValue: toSafeInt(row.current_value, 0),
+                reportType: toSafeText(row.report_type),
+                payload: parseJsonRecord(row.payload),
+                sentAt: formatDateTimeCell(row.sent_at),
+                createdAt: formatDateTimeCell(row.created_at)
+              }));
+
+              return {
+                summary: {
+                  totalRecords: records.length,
+                  totalValue: records.reduce((sum, item) => sum + Number(item.currentValue || 0), 0),
+                  activeBatches: new Set(records.map((item) => item.batchId).filter(Boolean)).size,
+                  sourceCount: new Set(records.map((item) => item.source).filter(Boolean)).size
+                },
+                records,
+                availableSources: Array.from(new Set(records.map((item) => item.source).filter(Boolean))).sort(),
+                availableReportTypes: Array.from(new Set(records.map((item) => item.reportType).filter(Boolean))).sort(),
+                lastSentAt: records[0]?.sentAt || records[0]?.createdAt || ''
+              };
+            };
+
+            if ((req.method || 'GET').toUpperCase() === 'GET') {
+              writeJson(res, 200, { ok: true, data: await loadEnrollmentStatisticsWorkspace() });
+              return;
+            }
+
+            if ((req.method || 'GET').toUpperCase() === 'POST') {
+              const body = await readJsonBody(req);
+              const statisticsRelation = await resolvePmedEnrollmentStatisticsRelation(pool, true);
+              const rows = buildEnrollmentStatisticsFeedRows(body);
+
+              if (!rows.length) {
+                writeJson(res, 422, {
+                  ok: false,
+                  message: 'No enrollment statistics rows were found in the incoming payload.'
+                });
+                return;
+              }
+
+              for (const row of rows) {
+                await pool.query(
+                  `INSERT INTO ${statisticsRelation} (
+                     id, batch_id, source, office, metric, current_value, report_type, payload, sent_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)
+                   ON CONFLICT (id) DO UPDATE SET
+                     batch_id = EXCLUDED.batch_id,
+                     source = EXCLUDED.source,
+                     office = EXCLUDED.office,
+                     metric = EXCLUDED.metric,
+                     current_value = EXCLUDED.current_value,
+                     report_type = EXCLUDED.report_type,
+                     payload = EXCLUDED.payload,
+                     sent_at = EXCLUDED.sent_at,
+                     updated_at = CURRENT_TIMESTAMP`,
+                  [
+                    row.id,
+                    row.batchId,
+                    row.source,
+                    row.office,
+                    row.metric,
+                    row.currentValue,
+                    row.reportType,
+                    JSON.stringify(row.payload),
+                    row.sentAt
+                  ]
+                );
+              }
+
+              await insertModuleActivity(
+                pool,
+                'pmed',
+                'ENROLLMENT_STATISTICS_RECEIVED',
+                `${rows.length} enrollment statistic row(s) were received from ${toSafeText(body.source) || 'Registrar'}.`,
+                toSafeText(body.source) || 'Registrar',
+                'enrollment_statistics',
+                rows[0]?.batchId || null,
+                {
+                  batch_id: rows[0]?.batchId || null,
+                  record_count: rows.length,
+                  report_type: rows[0]?.reportType || 'enrollment_statistics'
+                }
+              );
+
+              writeJson(res, 200, { ok: true, data: await loadEnrollmentStatisticsWorkspace() });
+              return;
+            }
+
+            writeJson(res, 405, { ok: false, message: 'Method not allowed for PMED enrollment statistics.' });
+            return;
+          }
+
           if (url.pathname === '/api/pmed/exchange-board') {
             const loadExchangeBoardWorkspace = async () => {
               const clearanceRelation =
@@ -5600,14 +5854,89 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                 return;
               }
 
-              if (action === 'submit_decision') {
-                const clearanceReference = toSafeText(body.clearance_reference);
-                const nextStatus = toSafeText(body.status).toLowerCase();
+              if (action === 'submit_decision' || action === 'submit_report') {
+                const metadata = parseJsonRecord(body.metadata);
+                const isReportSubmission = action === 'submit_report';
+                const nextStatus = (toSafeText(body.status) || (isReportSubmission ? 'approved' : '')).toLowerCase();
+                const inferredReportReference =
+                  toSafeText(body.report_reference) ||
+                  toSafeText(metadata.report_reference) ||
+                  toSafeText(body.external_reference) ||
+                  toSafeText(metadata.reference_no);
+                const clearanceReference =
+                  toSafeText(body.clearance_reference) ||
+                  (inferredReportReference ? `${departmentDef?.key.toUpperCase()}-REPORT-${inferredReportReference}` : '');
                 if (!clearanceReference || !['approved', 'rejected', 'hold', 'pending'].includes(nextStatus)) {
                   writeJson(res, 422, { ok: false, message: 'clearance_reference and valid status are required.' });
                   return;
                 }
-                const metadata = parseJsonRecord(body.metadata);
+                const mergedMetadata = {
+                  ...metadata,
+                  source_department: toSafeText(metadata.source_department) || departmentDef?.key || null,
+                  source_entity: toSafeText(metadata.source_entity) || (isReportSubmission ? 'report' : null),
+                  stage:
+                    toSafeText(metadata.stage) ||
+                    toSafeText(body.stage) ||
+                    (isReportSubmission || toSafeText(metadata.report_name || body.report_name) ? 'reporting' : null),
+                  target_department:
+                    toSafeText(metadata.target_department) ||
+                    toSafeText(body.target_department) ||
+                    ((isReportSubmission || toSafeText(metadata.report_name || body.report_name)) && departmentDef?.sends.includes('pmed')
+                      ? 'pmed'
+                      : null),
+                  report_reference: inferredReportReference || null,
+                  report_name: toSafeText(metadata.report_name || body.report_name) || null,
+                  report_type: toSafeText(metadata.report_type || body.report_type) || null,
+                  plan_reference: toSafeText(metadata.plan_reference || body.plan_reference) || null,
+                  owner_name: toSafeText(metadata.owner_name || body.approver_name || body.requested_by) || null,
+                  file_url: toSafeText(metadata.file_url || body.file_url) || null,
+                  delivery_status: toSafeText(metadata.delivery_status) || (isReportSubmission ? 'Received' : null)
+                };
+                const patientName =
+                  toSafeText(body.patient_name) ||
+                  toSafeText(mergedMetadata.report_name) ||
+                  clearanceReference;
+                await pool.query(
+                  `INSERT INTO department_clearance_records (
+                    clearance_reference, patient_id, patient_code, patient_name, patient_type,
+                    department_key, department_name, stage_order, status, remarks, approver_name,
+                    approver_role, external_reference, requested_by, decided_at, metadata
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                  ON CONFLICT (clearance_reference) DO UPDATE SET
+                    patient_id = COALESCE(EXCLUDED.patient_id, department_clearance_records.patient_id),
+                    patient_code = COALESCE(EXCLUDED.patient_code, department_clearance_records.patient_code),
+                    patient_name = COALESCE(EXCLUDED.patient_name, department_clearance_records.patient_name),
+                    patient_type = COALESCE(EXCLUDED.patient_type, department_clearance_records.patient_type),
+                    department_key = EXCLUDED.department_key,
+                    department_name = EXCLUDED.department_name,
+                    stage_order = EXCLUDED.stage_order,
+                    status = EXCLUDED.status,
+                    remarks = EXCLUDED.remarks,
+                    approver_name = EXCLUDED.approver_name,
+                    approver_role = EXCLUDED.approver_role,
+                    external_reference = COALESCE(EXCLUDED.external_reference, department_clearance_records.external_reference),
+                    requested_by = COALESCE(EXCLUDED.requested_by, department_clearance_records.requested_by),
+                    decided_at = EXCLUDED.decided_at,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = CURRENT_TIMESTAMP`,
+                  [
+                    clearanceReference,
+                    toSafeText(body.patient_id) || null,
+                    toSafeText(body.patient_code) || inferredReportReference || null,
+                    patientName,
+                    normalizePatientType(body.patient_type || metadata.patient_type),
+                    departmentDef?.key,
+                    departmentDef?.name,
+                    Number(departmentDef?.stageOrder || 0),
+                    nextStatus,
+                    toSafeText(body.remarks) || null,
+                    toSafeText(body.approver_name) || null,
+                    toSafeText(body.approver_role) || null,
+                    toSafeText(body.external_reference) || inferredReportReference || null,
+                    toSafeText(body.requested_by) || null,
+                    JSON.stringify(mergedMetadata)
+                  ]
+                );
                 await pool.query(
                   `UPDATE department_clearance_records
                    SET status = ?, remarks = ?, approver_name = ?, approver_role = ?, external_reference = COALESCE(?, external_reference),
@@ -5619,14 +5948,14 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                     toSafeText(body.approver_name) || null,
                     toSafeText(body.approver_role) || null,
                     toSafeText(body.external_reference) || null,
-                    JSON.stringify(metadata),
+                    JSON.stringify(mergedMetadata),
                     clearanceReference
                   ]
                 );
                 const targetDepartment =
-                  findDepartmentIntegrationDefinition(toSafeText(metadata.target_department || body.target_department))?.key ||
+                  findDepartmentIntegrationDefinition(toSafeText(mergedMetadata.target_department || body.target_department))?.key ||
                   (
-                    (toSafeText(metadata.stage || body.stage).toLowerCase() === 'reporting' || toSafeText(metadata.report_name || body.report_name))
+                    (toSafeText(mergedMetadata.stage || body.stage).toLowerCase() === 'reporting' || toSafeText(mergedMetadata.report_name || body.report_name))
                     && departmentDef?.sends.includes('pmed')
                       ? 'pmed'
                       : ''
@@ -5634,38 +5963,49 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                 if (targetDepartment && nextStatus === 'approved') {
                   await queueDepartmentExchangeEvent(pool, {
                     sourceDepartment: departmentDef?.key || '',
-                    sourceEntity: toSafeText(metadata.source_entity || metadata.stage || body.source_entity) || 'report',
-                    sourceKey: toSafeText(body.external_reference || metadata.report_reference || metadata.reference_no || clearanceReference),
+                    sourceEntity: toSafeText(mergedMetadata.source_entity || mergedMetadata.stage || body.source_entity) || 'report',
+                    sourceKey: toSafeText(body.external_reference || mergedMetadata.report_reference || metadata.reference_no || clearanceReference),
                     targetDepartment,
-                    title: toSafeText(metadata.report_name || body.report_name || clearanceReference),
+                    title: toSafeText(mergedMetadata.report_name || body.report_name || clearanceReference),
                     detail: toSafeText(body.remarks || metadata.detail || metadata.summary),
-                    stage: toSafeText(metadata.stage || body.stage) || 'reporting',
-                    ownerName: toSafeText(metadata.owner_name || body.approver_name || departmentDef?.name),
-                    reportType: toSafeText(metadata.report_type || body.report_type),
-                    fileUrl: toSafeText(metadata.file_url || body.file_url),
-                    patientName: toSafeText(body.patient_name || metadata.patient_name || metadata.report_name || clearanceReference),
+                    stage: toSafeText(mergedMetadata.stage || body.stage) || 'reporting',
+                    ownerName: toSafeText(mergedMetadata.owner_name || body.approver_name || departmentDef?.name),
+                    reportType: toSafeText(mergedMetadata.report_type || body.report_type),
+                    fileUrl: toSafeText(mergedMetadata.file_url || body.file_url),
+                    patientName: toSafeText(body.patient_name || metadata.patient_name || mergedMetadata.report_name || clearanceReference),
                     patientType: normalizePatientType(body.patient_type || metadata.patient_type),
-                    referenceNo: toSafeText(metadata.report_reference || body.external_reference || clearanceReference),
-                    deliveryStatus: toSafeText(metadata.delivery_status) || (targetDepartment === 'pmed' ? 'Received' : 'Ready to Send'),
+                    referenceNo: toSafeText(mergedMetadata.report_reference || body.external_reference || clearanceReference),
+                    deliveryStatus: toSafeText(mergedMetadata.delivery_status) || (targetDepartment === 'pmed' ? 'Received' : 'Ready to Send'),
                     syncStatus: targetDepartment === 'pmed' ? 'synced' : 'sent',
-                    payload: metadata
+                    payload: mergedMetadata
                   });
                   await mirrorDepartmentReportDeliveryToPmed(pool, {
                     sourceDepartmentKey: departmentDef?.key || '',
                     targetDepartmentKey: targetDepartment,
-                    reportReference: toSafeText(metadata.report_reference || body.external_reference || clearanceReference),
-                    reportName: toSafeText(metadata.report_name || body.report_name || clearanceReference),
-                    reportType: toSafeText(metadata.report_type || body.report_type),
-                    planReference: toSafeText(metadata.plan_reference || body.plan_reference),
-                    ownerName: toSafeText(metadata.owner_name || body.approver_name || departmentDef?.name),
+                    reportReference: toSafeText(mergedMetadata.report_reference || body.external_reference || clearanceReference),
+                    reportName: toSafeText(mergedMetadata.report_name || body.report_name || clearanceReference),
+                    reportType: toSafeText(mergedMetadata.report_type || body.report_type),
+                    planReference: toSafeText(mergedMetadata.plan_reference || body.plan_reference),
+                    ownerName: toSafeText(mergedMetadata.owner_name || body.approver_name || departmentDef?.name),
                     actor: toSafeText(body.approver_name) || departmentDef?.name,
-                    deliveryStatus: toSafeText(metadata.delivery_status) || 'Received',
-                    fileUrl: toSafeText(metadata.file_url || body.file_url),
+                    deliveryStatus: toSafeText(mergedMetadata.delivery_status) || 'Received',
+                    fileUrl: toSafeText(mergedMetadata.file_url || body.file_url),
                     detail: toSafeText(body.remarks || metadata.detail || metadata.summary),
-                    metadata
+                    metadata: mergedMetadata
                   });
                 }
-                await insertModuleActivity(pool, 'department_clearance', `Clearance ${nextStatus}`, `${departmentDef?.name} marked ${clearanceReference} as ${nextStatus}.`, toSafeText(body.approver_name) || departmentDef?.name || 'External Department', 'clearance', clearanceReference, { department: departmentDef?.key, status: nextStatus });
+                await insertModuleActivity(
+                  pool,
+                  'department_clearance',
+                  isReportSubmission ? 'Report Submitted' : `Clearance ${nextStatus}`,
+                  isReportSubmission
+                    ? `${departmentDef?.name} submitted ${toSafeText(mergedMetadata.report_name || clearanceReference)} for PMED reporting.`
+                    : `${departmentDef?.name} marked ${clearanceReference} as ${nextStatus}.`,
+                  toSafeText(body.approver_name) || departmentDef?.name || 'External Department',
+                  isReportSubmission ? 'report' : 'clearance',
+                  clearanceReference,
+                  { department: departmentDef?.key, status: nextStatus, report_reference: toSafeText(mergedMetadata.report_reference) || null }
+                );
                 writeJson(res, 200, { ok: true, message: 'Department decision recorded.' });
                 return;
               }

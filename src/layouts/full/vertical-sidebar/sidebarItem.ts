@@ -3,6 +3,7 @@ import {
   mdiArrowDecisionOutline,
   mdiCalendarClockOutline,
   mdiChartLine,
+  mdiChartBoxOutline,
   mdiClipboardTextOutline,
   mdiCogOutline,
   mdiDatabaseOutline,
@@ -61,6 +62,11 @@ const sidebarItem: menu[] = [
     title: 'Reporting',
     icon: mdiFileChartOutline,
     to: '/pmed/reporting'
+  },
+  {
+    title: 'Enrollment Statistics',
+    icon: mdiChartBoxOutline,
+    to: '/pmed/enrollment-statistics'
   },
   {
     title: 'Exchange Board',

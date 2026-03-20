@@ -123,6 +123,7 @@ Why:
 Recommended PHP behavior:
 - keep the prefect system as source of truth
 - push only the clearance result into the clinic system
+- for PMED reporting handoff, POST to `backend/integrations/departments/prefect.php` with `action: "submit_report"` and include `report_reference`, `report_name`, `report_type`, `plan_reference`, and `metadata.target_department: "pmed"`
 
 ### 6. Comlab
 

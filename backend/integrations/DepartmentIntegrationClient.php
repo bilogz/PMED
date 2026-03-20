@@ -48,6 +48,16 @@ final class DepartmentIntegrationClient
         return (array) ($response['data'] ?? []);
     }
 
+    public function submitReportToPmed(string $departmentKey, array $payload): array
+    {
+        $response = $this->client->post('/api/integrations/departments/records', array_merge($payload, [
+            'action' => 'submit_report',
+            'department_key' => $departmentKey,
+        ]));
+
+        return (array) ($response['data'] ?? []);
+    }
+
     public function seedDefaultFlow(array $payload): array
     {
         $response = $this->client->post('/api/integrations/departments/records', array_merge($payload, [
