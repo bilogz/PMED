@@ -4,6 +4,7 @@ import AnalyticsCardGrid from '@/components/shared/AnalyticsCardGrid.vue';
 import { requestConfirmModal } from '@/composables/useConfirmModal';
 import { useRealtimeWorkspace } from '@/composables/useRealtimeWorkspace';
 import { emitSuccessModal } from '@/composables/useSuccessModal';
+import { fetchDepartmentMap } from '@/services/departmentMap';
 import { formatDateTimeWithTimezone } from '@/utils/dateTime';
 import {
   fetchReportingWorkspace,
@@ -47,7 +48,7 @@ const form = reactive({
 });
 
 const exportFormats = ['PDF', 'Excel', 'PDF / Excel'];
-const departmentOptions = ['Clinic', 'Cashier', 'Guidance', 'Prefect', 'Computer Laboratory', 'CRAD', 'HR'];
+const departmentOptions = ref<string[]>(['Clinic', 'Cashier', 'Guidance', 'Prefect', 'Computer Laboratory', 'CRAD', 'HR']);
 const statusOptions: Array<'All Statuses' | DeliveryStatus> = [
   'All Statuses',
   'Awaiting Department',
@@ -68,18 +69,21 @@ const selectedPackageSummary = computed(() => {
 });
 const selectedPackageSections = computed(() => (Array.isArray(selectedReport.value?.packageSections) ? selectedReport.value?.packageSections : []));
 const canEditSelectedReport = computed(() => selectedReport.value?.sourceDepartment === 'PMED' && !selectedReport.value?.isExternalDelivery);
+const essentialChecklistItems = computed(() => dispatchChecklist.value.filter((item) => item.id >= 1 && item.id <= 7));
+const essentialReceivedCount = computed(() => essentialChecklistItems.value.filter((item) => item.done).length);
+const pendingDepartmentCount = computed(() => essentialChecklistItems.value.filter((item) => !item.done).length);
 
 const cards = computed(() => [
   {
     title: 'Essential Received',
-    value: String(reports.value.filter((item) => item.sourceDepartment !== 'PMED' && item.deliveryStatus === 'Received').length),
+    value: String(essentialReceivedCount.value),
     subtitle: 'Department reports in',
     className: 'analytics-card-blue',
     icon: 'mdi-inbox-arrow-down-outline'
   },
   {
     title: 'Pending Departments',
-    value: String(reports.value.filter((item) => item.deliveryStatus === 'Awaiting Department').length),
+    value: String(pendingDepartmentCount.value),
     subtitle: 'Still expected',
     className: 'analytics-card-orange',
     icon: 'mdi-clock-outline'
@@ -174,6 +178,21 @@ async function loadWorkspace(forceRefresh = false, options: { silent?: boolean }
     });
   } finally {
     if (!options.silent) isLoading.value = false;
+  }
+}
+
+async function loadDepartmentOptions(forceRefresh = false): Promise<void> {
+  try {
+    const departments = await fetchDepartmentMap(forceRefresh);
+    const reportingDepartments = departments
+      .filter((item) => item.key !== 'pmed' && item.key !== 'school_admin' && item.sends.includes('pmed'))
+      .map((item) => item.name)
+      .filter(Boolean);
+    if (reportingDepartments.length) {
+      departmentOptions.value = reportingDepartments;
+    }
+  } catch {
+    // Keep the static fallback list when the shared integration map is unavailable.
   }
 }
 
@@ -483,6 +502,7 @@ async function archiveReport(target?: ReportRow | null): Promise<void> {
 }
 
 onMounted(async () => {
+  await loadDepartmentOptions();
   await loadWorkspace();
 });
 
@@ -641,7 +661,7 @@ useRealtimeWorkspace(() => loadWorkspace(true, { silent: true }), { intervalMs: 
             </div>
             <div class="text-body-2">
               <strong>Source:</strong> {{ selectedReport.sourceDepartment }}
-              <span class="text-medium-emphasis"> • {{ selectedReport.reportType }}</span>
+              <span class="text-medium-emphasis"> - {{ selectedReport.reportType }}</span>
             </div>
             <div class="text-body-2">
               <strong>Status:</strong> {{ selectedReport.deliveryStatus }}
@@ -712,7 +732,7 @@ useRealtimeWorkspace(() => loadWorkspace(true, { silent: true }), { intervalMs: 
                 <v-chip size="x-small" :color="toneColor(log.tone)" variant="tonal">{{ formatTimestamp(log.createdAt) }}</v-chip>
               </div>
               <div class="text-body-2 mb-2">{{ log.detail }}</div>
-              <div class="text-caption text-medium-emphasis">{{ log.actor }} • {{ log.reference || 'Reporting' }}</div>
+              <div class="text-caption text-medium-emphasis">{{ log.actor }} - {{ log.reference || 'Reporting' }}</div>
             </div>
             <div v-if="!activityLogs.length" class="text-body-2 text-medium-emphasis">No reporting activity has been recorded yet.</div>
           </v-card-text>
@@ -813,6 +833,7 @@ useRealtimeWorkspace(() => loadWorkspace(true, { silent: true }), { intervalMs: 
 <style scoped>
 @import './shared-pmed.css';
 </style>
+
 
 
 

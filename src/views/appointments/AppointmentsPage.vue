@@ -31,6 +31,7 @@ import {
   type AppointmentMonitorRow,
   type AppointmentMonitorSummary
 } from '@/services/appointmentMonitor';
+import { fetchPatientRecords, type PatientRecord } from '@/services/patientRecords';
 
 const loading = ref(false);
 const saving = ref(false);
@@ -69,6 +70,7 @@ const dayOfWeekOptions = [
   { title: 'Saturday', value: 6 }
 ];
 const rows = ref<AppointmentRow[]>([]);
+const patientRecords = ref<PatientRecord[]>([]);
 const analytics = ref<AppointmentAnalytics>({
   totalPatients: 0,
   totalAppointments: 0,
@@ -326,7 +328,26 @@ function dayOfWeekLabel(value: number): string {
 
 const existingPatientOptions = computed(() => {
   const seen = new Set<string>();
-  return rows.value
+  const masterRecords = patientRecords.value.filter((record) =>
+    addBookedByRole.value === 'student'
+      ? record.patientType !== 'teacher'
+      : record.patientType !== 'student'
+  );
+  const lookupSource = masterRecords.length
+    ? masterRecords.map((record) => ({
+        patientId: record.patientCode,
+        patientName: record.patientName,
+        patientEmail: record.patientEmail,
+        phoneNumber: record.phoneNumber
+      }))
+    : rows.value.map((row) => ({
+        patientId: row.patientId,
+        patientName: row.patientName,
+        patientEmail: row.patientEmail,
+        phoneNumber: row.phoneNumber
+      }));
+
+  return lookupSource
     .map((row) => {
       const pid = row.patientId || '';
       const key = pid || `${row.patientName}|${row.phoneNumber}`;
@@ -338,8 +359,16 @@ const existingPatientOptions = computed(() => {
         row
       };
     })
-    .filter((item): item is { title: string; value: string; row: AppointmentRow } => Boolean(item));
+    .filter((item): item is { title: string; value: string; row: { patientId: string; patientName: string; patientEmail: string; phoneNumber: string } } => Boolean(item));
 });
+
+async function loadPatientRecords(search = ''): Promise<void> {
+  try {
+    patientRecords.value = await fetchPatientRecords(search);
+  } catch {
+    patientRecords.value = [];
+  }
+}
 
 function normalizeDepartment(value: unknown): string {
   return String(value || '')
@@ -859,6 +888,7 @@ onMounted(() => {
   void loadAppointments();
   void loadDoctorsCatalog();
   void loadAvailabilityRows();
+  void loadPatientRecords();
   realtime.startPolling(() => {
     void loadAppointments({ silent: true });
   }, REALTIME_POLICY.polling.registrationMs);
@@ -1261,7 +1291,7 @@ onBeforeUnmount(() => {
                 :label="`Search Existing ${addBookerLabel}`"
                 variant="outlined"
                 density="comfortable"
-                :hint="`Select ${addBookerLabel.toLowerCase()} from previous appointment records`"
+                :hint="`Select ${addBookerLabel.toLowerCase()} from shared records`"
                 persistent-hint
                 @update:model-value="applyExistingPatientLookup"
               />

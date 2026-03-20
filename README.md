@@ -39,7 +39,7 @@ Open:
 
 ## Default admin account
 
-- `admin@pmed.local` / `admin123`
+- `admin@pmed.local` / `Admin#123`
 
 ## What to test
 
@@ -50,4 +50,3 @@ Open:
   - `/pmed/monitoring`
   - `/pmed/evaluation`
   - `/pmed/reporting`
-

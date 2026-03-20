@@ -754,6 +754,80 @@ async function upsertDepartmentReportRequest(
   });
 }
 
+async function mirrorDepartmentReportDeliveryToPmed(
+  pool: Pool,
+  params: {
+    sourceDepartmentKey: string;
+    targetDepartmentKey?: string | null;
+    reportReference?: string | null;
+    reportName?: string | null;
+    reportType?: string | null;
+    planReference?: string | null;
+    ownerName?: string | null;
+    actor?: string | null;
+    deliveryStatus?: string | null;
+    archiveStatus?: string | null;
+    fileUrl?: string | null;
+    detail?: string | null;
+    metadata?: Record<string, unknown>;
+  }
+): Promise<void> {
+  const sourceDepartment = findDepartmentIntegrationDefinition(params.sourceDepartmentKey);
+  const targetDepartment = findDepartmentIntegrationDefinition(params.targetDepartmentKey);
+  if (!sourceDepartment || targetDepartment?.key !== 'pmed') return;
+
+  const reportReference =
+    toSafeText(params.reportReference) ||
+    toSafeText(params.metadata?.report_reference) ||
+    toSafeText(params.metadata?.reference_no) ||
+    `RPT-${sourceDepartment.key.toUpperCase()}-${Date.now()}`;
+  const reportName =
+    toSafeText(params.reportName) ||
+    toSafeText(params.metadata?.report_name) ||
+    `${sourceDepartment.name} Report Package`;
+  const reportType =
+    toSafeText(params.reportType) ||
+    toSafeText(params.metadata?.report_type) ||
+    `${sourceDepartment.name} Report`;
+  const actor =
+    toSafeText(params.actor) ||
+    toSafeText(params.ownerName) ||
+    toSafeText(params.metadata?.owner_name) ||
+    `${sourceDepartment.name} Reports`;
+  const deliveryStatus =
+    toSafeText(params.deliveryStatus) ||
+    toSafeText(params.metadata?.delivery_status) ||
+    'Received';
+  const mergedMetadata = {
+    ...(params.metadata || {}),
+    source_department: sourceDepartment.key,
+    source_department_name: sourceDepartment.name,
+    target_department: 'pmed',
+    target_department_name: 'PMED',
+    target_key: 'pmed',
+    report_reference: reportReference,
+    report_name: reportName,
+    report_type: reportType,
+    plan_reference: toSafeText(params.planReference) || toSafeText(params.metadata?.plan_reference) || null,
+    owner_name: actor,
+    file_url: toSafeText(params.fileUrl) || toSafeText(params.metadata?.file_url) || null,
+    delivery_status: deliveryStatus,
+    archive_status: toSafeText(params.archiveStatus) || toSafeText(params.metadata?.archive_status) || 'Active',
+    notification_scope: 'department_reports'
+  };
+
+  await insertModuleActivity(
+    pool,
+    'department_reports',
+    deliveryStatus === 'Awaiting Department' ? 'Department Report Requested' : 'Department Report Received',
+    toSafeText(params.detail) || `${sourceDepartment.name} submitted ${reportName} to PMED.`,
+    actor,
+    'report',
+    reportReference,
+    mergedMetadata
+  );
+}
+
 async function backfillAppointmentCashierEvents(pool: Pool, options: SupabaseApiOptions, limit = 50): Promise<void> {
   await ensureCashierIntegrationTables(pool);
   const [missingRows] = await pool.query<RowDataPacket[]>(
@@ -1647,70 +1721,37 @@ async function ensurePatientMasterTables(pool: Pool): Promise<void> {
 }
 
 async function ensureAdminProfileTables(pool: Pool): Promise<void> {
-  // Supabase-only: tables come from `supabase/schema.sql`.
-  void pool;
-  return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS admin_profiles (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      username VARCHAR(190) NOT NULL UNIQUE,
-      full_name VARCHAR(190) NOT NULL,
-      email VARCHAR(190) NOT NULL,
-      role VARCHAR(80) NOT NULL DEFAULT 'admin',
-      department VARCHAR(120) NOT NULL DEFAULT 'Administration',
-      access_exemptions JSON NULL,
-      is_super_admin TINYINT(1) NOT NULL DEFAULT 0,
-      password_hash TEXT NULL,
-      status VARCHAR(30) NOT NULL DEFAULT 'active',
-      phone VARCHAR(80) NOT NULL DEFAULT '',
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      last_login_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      email_notifications TINYINT(1) NOT NULL DEFAULT 1,
-      in_app_notifications TINYINT(1) NOT NULL DEFAULT 1,
-      dark_mode TINYINT(1) NOT NULL DEFAULT 0
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS admin_activity_logs (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      username VARCHAR(190) NOT NULL,
-      action VARCHAR(100) NOT NULL,
-      raw_action VARCHAR(100) NOT NULL,
-      description TEXT NOT NULL,
-      ip_address VARCHAR(80) NOT NULL DEFAULT '127.0.0.1',
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS admin_sessions (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      session_token_hash VARCHAR(128) NOT NULL UNIQUE,
-      admin_profile_id BIGINT NOT NULL,
-      ip_address VARCHAR(80) NOT NULL DEFAULT '',
-      user_agent TEXT NOT NULL,
-      expires_at DATETIME NOT NULL,
-      revoked_at DATETIME NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+  const adminProfilesExists = await relationExists(pool, 'public.admin_profiles');
+  if (!adminProfilesExists) return;
 
-  const [rows] = await pool.query<RowDataPacket[]>(`SELECT id FROM admin_profiles WHERE LOWER(username) = 'joecelgarcia1@gmail.com' LIMIT 1`);
+  const defaultAdminUsername = 'admin@pmed.local';
+  const defaultAdminEmail = 'admin@pmed.local';
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT id
+     FROM admin_profiles
+     WHERE LOWER(username) = ?
+        OR LOWER(email) = ?
+     LIMIT 1`,
+    [defaultAdminUsername, defaultAdminEmail]
+  );
   if (rows[0]) return;
 
   await pool.query(
-    `INSERT INTO admin_profiles (username, full_name, email, role, department, access_exemptions, is_super_admin, password_hash, status, phone)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO admin_profiles (
+      username, full_name, email, role, department, access_exemptions,
+      is_super_admin, password_hash, status, phone
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      'joecelgarcia1@gmail.com',
-      'BCP Clinic Admin',
-      'joecelgarcia1@gmail.com',
-      'admin',
-      'Administration',
-      JSON.stringify([]),
+      defaultAdminUsername,
+      'Default PMED Admin',
+      defaultAdminEmail,
+      'Admin',
+      'PMED',
+      ['pmed', 'reports'],
       1,
       hashPassword('Admin#123'),
       'active',
-      '+63 912 345 6789'
+      ''
     ]
   );
 }
@@ -3576,8 +3617,87 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                 (await relationExists(pool, 'pmed.module_activity_logs')) ? 'pmed.module_activity_logs' :
                 '';
               const loadExternalDepartmentReportDeliveries = async () => {
+                const loadComlabBridgeDeliveries = async () => {
+                  const comlabDocumentsRelation =
+                    (await relationExists(pool, 'public.comlab_integration_documents')) ? 'public.comlab_integration_documents' :
+                    (await relationExists(pool, 'comlab.integration_documents')) ? 'comlab.integration_documents' :
+                    '';
+                  const comlabMessageFeedRelation =
+                    (await relationExists(pool, 'public.comlab_integration_message_feed')) ? 'public.comlab_integration_message_feed' :
+                    (await relationExists(pool, 'comlab.integration_message_feed')) ? 'comlab.integration_message_feed' :
+                    '';
+                  const comlabRecordTypesRelation =
+                    (await relationExists(pool, 'public.comlab_integration_record_types')) ? 'public.comlab_integration_record_types' :
+                    (await relationExists(pool, 'comlab.integration_record_types')) ? 'comlab.integration_record_types' :
+                    '';
+
+                  if (!comlabDocumentsRelation || !comlabMessageFeedRelation) {
+                    return { reports: [] as Array<Record<string, unknown>>, activityLogs: [] as Array<Record<string, unknown>> };
+                  }
+
+                  const recordTypeJoin = comlabRecordTypesRelation
+                    ? `LEFT JOIN ${comlabRecordTypesRelation} rt ON rt.record_type_id = d.record_type_id`
+                    : '';
+
+                  const [rows] = await pool.query<RowDataPacket[]>(
+                    `SELECT d.document_id, d.subject_ref, d.title, d.source_reference, d.status, d.payload,
+                            d.sent_at, d.received_at, d.acknowledged_at, d.created_at,
+                            COALESCE(rt.record_type_code, mf.record_type_code) AS record_type_code,
+                            COALESCE(rt.record_type_name, mf.record_type_name) AS record_type_name,
+                            COALESCE(mf.sender_department, 'Computer Laboratory') AS sender_department
+                     FROM ${comlabDocumentsRelation} d
+                     LEFT JOIN ${comlabMessageFeedRelation} mf
+                       ON mf.document_id = d.document_id
+                     ${recordTypeJoin}
+                     WHERE LOWER(COALESCE(mf.receiver_department, '')) LIKE '%pmed%'
+                     ORDER BY COALESCE(d.sent_at, d.created_at) DESC
+                     LIMIT 24`
+                  );
+
+                  const reports = rows.map((row, index) => {
+                    const payload = parseJsonRecord(row.payload);
+                    const summary = typeof payload.summary === 'object' && payload.summary != null && !Array.isArray(payload.summary)
+                      ? (payload.summary as Record<string, unknown>)
+                      : null;
+                    const sections = Array.isArray(payload.pmed_sections)
+                      ? (payload.pmed_sections as Array<Record<string, unknown>>)
+                      : [];
+                    const statusText = toSafeText(row.status).toLowerCase();
+                    return {
+                      id: toSafeText(row.subject_ref || row.source_reference || row.document_id || `COMLAB-PMED-${index + 1}`),
+                      planReference: toSafeText(payload.plan_reference || payload.coverage_period || payload.report_period),
+                      reportName: toSafeText(row.title) || 'COMLAB Laboratory Usage Reports for PMED Department',
+                      reportType: toSafeText(row.record_type_name || row.record_type_code) || 'Laboratory Usage Reports',
+                      sourceDepartment: toSafeText(row.sender_department) || 'Computer Laboratory',
+                      ownerName: toSafeText(payload.owner_name || payload.requested_by) || 'ComLab Supervisor',
+                      exportFormat: toSafeText(payload.export_format) || 'JSON',
+                      generatedAt: formatDateTimeCell(row.sent_at || row.created_at),
+                      deliveryStatus: ['sent', 'received', 'acknowledged'].includes(statusText) || row.received_at || row.acknowledged_at ? 'Received' : 'Awaiting Department',
+                      archiveStatus: 'Active',
+                      fileUrl: toSafeText(payload.file_url),
+                      administrationSentAt: '',
+                      isExternalDelivery: true,
+                      packageSummary: summary,
+                      packageSections: sections
+                    };
+                  });
+
+                  const activityLogs = rows.map((row, index) => ({
+                    id: 500000 + index,
+                    reference: toSafeText(row.subject_ref || row.source_reference || row.document_id),
+                    action: 'Department Report Received',
+                    detail: `${toSafeText(row.sender_department) || 'Computer Laboratory'} submitted ${toSafeText(row.title) || 'a laboratory usage report'} to PMED.`,
+                    actor: toSafeText(row.sender_department) || 'Computer Laboratory',
+                    tone: 'success' as const,
+                    createdAt: formatDateTimeCell(row.sent_at || row.created_at)
+                  }));
+
+                  return { reports, activityLogs };
+                };
+                const comlabBridgeDeliveries = await loadComlabBridgeDeliveries();
+
                 if (!moduleActivityRelation) {
-                  return { reports: [] as Array<Record<string, unknown>>, activityLogs: [] as Array<Record<string, unknown>> };
+                  return comlabBridgeDeliveries;
                 }
 
                 const [departmentReportRows] = await pool.query<RowDataPacket[]>(
@@ -3623,6 +3743,21 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                     packageSections: sections
                   };
                 });
+                const dedupedReports = Array.from(
+                  [...reports, ...comlabBridgeDeliveries.reports].reduce((map, report) => {
+                    const sourceDepartment = toSafeText(report.sourceDepartment).toLowerCase() || 'external';
+                    const reportType = toSafeText(report.reportType).toLowerCase();
+                    const reportName = toSafeText(report.reportName).toLowerCase();
+                    const groupKey =
+                      reportType && !reportType.includes('consolidated')
+                        ? `${sourceDepartment}|${reportType}`
+                        : `${sourceDepartment}|${reportName}`;
+                    if (!map.has(groupKey)) {
+                      map.set(groupKey, report);
+                    }
+                    return map;
+                  }, new Map<string, Record<string, unknown>>()).values()
+                );
 
                 const activityLogs = departmentReportRows.map((row) => {
                   const metadata = parseJsonRecord(row.metadata);
@@ -3644,7 +3779,11 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                   };
                 });
 
-                return { reports, activityLogs };
+                const mergedActivityLogs = [...activityLogs, ...comlabBridgeDeliveries.activityLogs]
+                  .sort((left, right) => new Date(String(right.createdAt || '')).getTime() - new Date(String(left.createdAt || '')).getTime())
+                  .slice(0, 24);
+
+                return { reports: dedupedReports, activityLogs: mergedActivityLogs };
               };
 
               if (!hasStandaloneReports) {
@@ -5441,6 +5580,20 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                     syncStatus: inferredTargetDepartment === 'pmed' ? 'synced' : 'sent',
                     payload: metadata
                   });
+                  await mirrorDepartmentReportDeliveryToPmed(pool, {
+                    sourceDepartmentKey: departmentDef?.key || '',
+                    targetDepartmentKey: inferredTargetDepartment,
+                    reportReference: toSafeText(metadata.report_reference || body.external_reference || clearanceReference),
+                    reportName: toSafeText(metadata.report_name || body.report_name || patientName),
+                    reportType: toSafeText(metadata.report_type || body.report_type),
+                    planReference: toSafeText(metadata.plan_reference || body.plan_reference),
+                    ownerName: toSafeText(metadata.owner_name || body.approver_name || body.requested_by),
+                    actor: toSafeText(body.requested_by || body.approver_name),
+                    deliveryStatus: toSafeText(metadata.delivery_status) || 'Received',
+                    fileUrl: toSafeText(metadata.file_url || body.file_url),
+                    detail: toSafeText(body.remarks || metadata.detail || metadata.summary),
+                    metadata
+                  });
                 }
                 await insertModuleActivity(pool, 'department_clearance', 'Clearance Requested', `Clearance requested from ${departmentDef?.name} for ${patientName}.`, toSafeText(body.requested_by) || 'System', 'clearance', clearanceReference, { department: departmentDef?.key });
                 writeJson(res, 200, { ok: true, message: 'Department clearance request saved.', data: { clearance_reference: clearanceReference } });
@@ -5496,6 +5649,20 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                     deliveryStatus: toSafeText(metadata.delivery_status) || (targetDepartment === 'pmed' ? 'Received' : 'Ready to Send'),
                     syncStatus: targetDepartment === 'pmed' ? 'synced' : 'sent',
                     payload: metadata
+                  });
+                  await mirrorDepartmentReportDeliveryToPmed(pool, {
+                    sourceDepartmentKey: departmentDef?.key || '',
+                    targetDepartmentKey: targetDepartment,
+                    reportReference: toSafeText(metadata.report_reference || body.external_reference || clearanceReference),
+                    reportName: toSafeText(metadata.report_name || body.report_name || clearanceReference),
+                    reportType: toSafeText(metadata.report_type || body.report_type),
+                    planReference: toSafeText(metadata.plan_reference || body.plan_reference),
+                    ownerName: toSafeText(metadata.owner_name || body.approver_name || departmentDef?.name),
+                    actor: toSafeText(body.approver_name) || departmentDef?.name,
+                    deliveryStatus: toSafeText(metadata.delivery_status) || 'Received',
+                    fileUrl: toSafeText(metadata.file_url || body.file_url),
+                    detail: toSafeText(body.remarks || metadata.detail || metadata.summary),
+                    metadata
                   });
                 }
                 await insertModuleActivity(pool, 'department_clearance', `Clearance ${nextStatus}`, `${departmentDef?.name} marked ${clearanceReference} as ${nextStatus}.`, toSafeText(body.approver_name) || departmentDef?.name || 'External Department', 'clearance', clearanceReference, { department: departmentDef?.key, status: nextStatus });
