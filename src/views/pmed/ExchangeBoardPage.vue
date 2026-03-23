@@ -30,11 +30,20 @@ const form = reactive({
   title: '',
   detail: '',
   stage: 'reporting',
-  targetDepartment: ''
+  targetDepartment: '',
+  requestType: 'general',
+  essentialsCategory: '',
+  quantity: ''
 });
 
 const directionOptions: DirectionFilter[] = ['All Directions', 'Inbound', 'Outbound', 'Internal'];
 const departmentOptions = ['Clinic', 'Cashier', 'Guidance', 'Prefect', 'Computer Laboratory', 'CRAD', 'HR', 'School Administration'];
+const requestTypeOptions = [
+  { title: 'General Exchange', value: 'general' },
+  { title: 'Employee Request (HR)', value: 'employee_request' },
+  { title: 'ComLab Essentials Request', value: 'comlab_essentials' }
+];
+const essentialsCategoryOptions = ['Computer', 'Computer Parts', 'Chairs', 'Aircon', 'Others'];
 
 const selectedRecord = computed(() => records.value.find((item) => item.id === selectedRecordId.value) || null);
 
@@ -175,7 +184,10 @@ function resetForm(): void {
     title: '',
     detail: '',
     stage: 'reporting',
-    targetDepartment: ''
+    targetDepartment: '',
+    requestType: 'general',
+    essentialsCategory: '',
+    quantity: ''
   });
 }
 
@@ -191,17 +203,45 @@ function selectRecord(record: ExchangeBoardRecord): void {
 }
 
 async function saveExchange(): Promise<void> {
-  if (!form.recordReference.trim() || !form.title.trim() || !form.targetDepartment.trim()) {
+  const resolvedTargetDepartment =
+    form.requestType === 'employee_request'
+      ? 'HR'
+      : form.requestType === 'comlab_essentials'
+        ? 'Computer Laboratory'
+        : form.targetDepartment.trim();
+  const normalizedQuantity = Number(form.quantity || 0);
+  const normalizedDetails = [
+    form.detail.trim(),
+    form.requestType === 'comlab_essentials' && form.essentialsCategory
+      ? `Item Category: ${form.essentialsCategory}`
+      : '',
+    form.requestType === 'comlab_essentials' && normalizedQuantity > 0 ? `Quantity: ${normalizedQuantity}` : ''
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  if (!form.recordReference.trim() || !form.title.trim() || !resolvedTargetDepartment) {
     emitSuccessModal({ title: 'Missing Fields', message: 'Please complete the reference, title, and target department.', tone: 'warning' });
+    return;
+  }
+  if (form.requestType === 'comlab_essentials' && !form.essentialsCategory.trim()) {
+    emitSuccessModal({ title: 'Missing Item Category', message: 'Select a ComLab essentials category (computer, parts, chairs, aircon, or others).', tone: 'warning' });
+    return;
+  }
+  if (form.requestType === 'comlab_essentials' && normalizedQuantity <= 0) {
+    emitSuccessModal({ title: 'Invalid Quantity', message: 'Quantity for ComLab essentials must be greater than zero.', tone: 'warning' });
     return;
   }
   try {
     const workspace = await runExchangeBoardAction(dialogMode.value === 'request' ? 'request_exchange' : 'dispatch_exchange', {
       recordReference: form.recordReference.trim(),
       title: form.title.trim(),
-      detail: form.detail.trim(),
+      detail: normalizedDetails,
       stage: form.stage.trim(),
-      targetDepartment: form.targetDepartment.trim(),
+      targetDepartment: resolvedTargetDepartment,
+      requestType: form.requestType,
+      essentialsCategory: form.essentialsCategory.trim() || undefined,
+      quantity: normalizedQuantity > 0 ? normalizedQuantity : undefined,
       actor: 'PMED Exchange Desk'
     });
     hydrateWorkspace(workspace);
@@ -472,13 +512,48 @@ useRealtimeWorkspace(() => loadWorkspace(true, { silent: true }), { intervalMs: 
               <v-text-field v-model="form.recordReference" label="Reference" variant="outlined" />
             </v-col>
             <v-col cols="12" md="6">
-              <v-select v-model="form.targetDepartment" :items="departmentOptions" label="Target Department" variant="outlined" />
+              <v-select
+                v-model="form.requestType"
+                :items="requestTypeOptions"
+                label="Request Type"
+                item-title="title"
+                item-value="value"
+                variant="outlined"
+              />
+            </v-col>
+            <v-col cols="12" md="6">
+              <v-select
+                v-model="form.targetDepartment"
+                :items="departmentOptions"
+                label="Target Department"
+                variant="outlined"
+                :disabled="form.requestType === 'employee_request' || form.requestType === 'comlab_essentials'"
+                :hint="form.requestType === 'employee_request' ? 'Auto-routed to HR.' : form.requestType === 'comlab_essentials' ? 'Auto-routed to Computer Laboratory.' : ''"
+                persistent-hint
+              />
             </v-col>
             <v-col cols="12">
               <v-text-field v-model="form.title" label="Title" variant="outlined" />
             </v-col>
             <v-col cols="12" md="6">
               <v-text-field v-model="form.stage" label="Stage" variant="outlined" />
+            </v-col>
+            <v-col v-if="form.requestType === 'comlab_essentials'" cols="12" md="6">
+              <v-select
+                v-model="form.essentialsCategory"
+                :items="essentialsCategoryOptions"
+                label="ComLab Item Category"
+                variant="outlined"
+              />
+            </v-col>
+            <v-col v-if="form.requestType === 'comlab_essentials'" cols="12" md="6">
+              <v-text-field
+                v-model="form.quantity"
+                label="Quantity"
+                type="number"
+                min="1"
+                variant="outlined"
+              />
             </v-col>
             <v-col cols="12">
               <v-textarea v-model="form.detail" label="Details" variant="outlined" rows="3" />

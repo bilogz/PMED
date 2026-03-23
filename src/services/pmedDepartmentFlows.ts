@@ -94,7 +94,7 @@ export async function dispatchStaffEvaluationFeedbackToHr(
 ): Promise<TrackedPmedDispatch<PmedStaffEvaluationFeedback>> {
   return await trackPmedDispatch(
     'hr',
-    'staff_evaluation_feedback',
+    'hr_staff_request',
     {
       report_period: feedback.report_period,
       feedback_summary: feedback.feedback_summary,

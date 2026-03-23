@@ -79,7 +79,27 @@ const PMED_ROUTES = [
     }
   },
   {
-    path: '/pmed/:pmedModule(planning|data-collection|monitoring|evaluation|reporting|enrollment-statistics|exchange-board)/:pathMatch(.*)*',
+    name: 'PMED HR Staff Request',
+    path: '/pmed/hr-staff-request',
+    component: () => import('@/views/admin/modules/HrStaffRequestPage.vue'),
+    meta: {
+      title: 'HR Staff Request',
+      subtitle: 'Request staff from HR',
+      description: 'Submit staffing requests to HR and monitor approval status for PMED medical staff.'
+    }
+  },
+  {
+    name: 'PMED COMLAB Report Verification',
+    path: '/pmed/comlab-report-verification',
+    component: () => import('@/views/pmed/ComlabReportVerificationPage.vue'),
+    meta: {
+      title: 'COMLAB Report Verification',
+      subtitle: 'Verify COMLAB reports',
+      description: 'Verify COMLAB missing/sent computer reports, return them to COMLAB, and track closure.'
+    }
+  },
+  {
+    path: '/pmed/:pmedModule(planning|data-collection|monitoring|evaluation|reporting|enrollment-statistics|exchange-board|hr-staff-request|comlab-report-verification)/:pathMatch(.*)*',
     redirect: (to: any) => `/pmed/${String(to.params.pmedModule || 'planning')}`
   },
   {

@@ -1,10 +1,12 @@
 import {
   mdiAccountOutline,
+  mdiAccountPlusOutline,
   mdiArrowDecisionOutline,
   mdiCalendarClockOutline,
   mdiChartLine,
   mdiChartBoxOutline,
   mdiClipboardTextOutline,
+  mdiClipboardCheckOutline,
   mdiCogOutline,
   mdiDatabaseOutline,
   mdiFileChartOutline,
@@ -72,6 +74,16 @@ const sidebarItem: menu[] = [
     title: 'Exchange Board',
     icon: mdiArrowDecisionOutline,
     to: '/pmed/exchange-board'
+  },
+  {
+    title: 'COMLAB Verify',
+    icon: mdiClipboardCheckOutline,
+    to: '/pmed/comlab-report-verification'
+  },
+  {
+    title: 'Request staff (HR)',
+    icon: mdiAccountPlusOutline,
+    to: '/pmed/hr-staff-request'
   },
   { divider: true },
   { header: 'SYSTEM' },

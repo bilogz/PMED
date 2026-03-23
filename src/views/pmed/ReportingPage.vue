@@ -106,23 +106,34 @@ const cards = computed(() => [
 
 const filteredReports = computed(() => {
   const keyword = searchTerm.value.trim().toLowerCase();
-  return reports.value.filter((item) => {
-    const matchesStatus = selectedStatus.value === 'All Statuses' || item.deliveryStatus === selectedStatus.value;
-    const matchesSearch =
-      !keyword ||
-      [
-        item.id,
-        item.planReference,
-        item.reportName,
-        item.ownerName,
-        item.exportFormat,
-        item.deliveryStatus
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(keyword);
-    return matchesStatus && matchesSearch;
-  });
+  return reports.value
+    .filter((item) => {
+      const matchesStatus = selectedStatus.value === 'All Statuses' || item.deliveryStatus === selectedStatus.value;
+      const matchesSearch =
+        !keyword ||
+        [
+          item.id,
+          item.planReference,
+          item.reportName,
+          item.ownerName,
+          item.exportFormat,
+          item.deliveryStatus
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(keyword);
+      return matchesStatus && matchesSearch;
+    })
+    .sort((left, right) => {
+      const rightTime = new Date(right.generatedAt || '').getTime();
+      const leftTime = new Date(left.generatedAt || '').getTime();
+
+      const safeRight = Number.isFinite(rightTime) ? rightTime : 0;
+      const safeLeft = Number.isFinite(leftTime) ? leftTime : 0;
+      if (safeRight !== safeLeft) return safeRight - safeLeft;
+
+      return String(right.id).localeCompare(String(left.id));
+    });
 });
 
 const totalPages = computed(() => Math.max(1, Math.ceil(filteredReports.value.length / rowsPerPage)));

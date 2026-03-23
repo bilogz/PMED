@@ -66,6 +66,9 @@ export async function runExchangeBoardAction(
     detail?: string;
     stage?: string;
     targetDepartment?: string;
+    requestType?: string;
+    essentialsCategory?: string;
+    quantity?: number;
     actor?: string;
   }
 ): Promise<ExchangeBoardWorkspace> {
@@ -79,6 +82,9 @@ export async function runExchangeBoardAction(
       detail: payload.detail,
       stage: payload.stage,
       target_department: payload.targetDepartment,
+      request_type: payload.requestType,
+      essentials_category: payload.essentialsCategory,
+      quantity: payload.quantity,
       actor: payload.actor || 'PMED Exchange Desk'
     }
   });

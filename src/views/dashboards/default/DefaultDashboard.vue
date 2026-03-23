@@ -255,6 +255,18 @@ function laneClass(tone: WorkflowLane['tone']): string {
             <p class="text-medium-emphasis mb-4">
               The clinic-style PMED workspace is now focused on HR integration. Workforce data, evaluation progress, and feedback handoffs stay in one live dashboard.
             </p>
+            <div class="d-flex flex-wrap align-center ga-2 mb-4">
+              <v-btn
+                to="/pmed/hr-staff-request"
+                color="white"
+                variant="flat"
+                rounded="pill"
+                prepend-icon="mdi-account-plus-outline"
+                class="hero-cta-hr"
+              >
+                Request staff from HR
+              </v-btn>
+            </div>
             <div class="d-flex align-center justify-space-between flex-wrap ga-3">
               <div>
                 <div class="text-caption text-medium-emphasis">Global Workflow Completion</div>
@@ -551,6 +563,7 @@ function laneClass(tone: WorkflowLane['tone']): string {
       <template #activator="{ props: activatorProps }">
         <v-btn v-bind="activatorProps" color="primary" icon="mdi-lightning-bolt-outline" size="large" elevation="6" />
       </template>
+      <v-btn key="quick-hr-staff" to="/pmed/hr-staff-request" color="primary" icon="mdi-account-plus-outline" size="small" />
       <v-btn key="quick-import" color="primary" icon="mdi-database-import-outline" size="small" />
       <v-btn key="quick-analyze" color="primary" icon="mdi-chart-line" size="small" />
       <v-btn key="quick-feedback" color="primary" icon="mdi-account-arrow-right-outline" size="small" />
@@ -580,6 +593,13 @@ function laneClass(tone: WorkflowLane['tone']): string {
 .hero-card :deep(.text-caption),
 .hero-card :deep(.text-medium-emphasis) {
   color: #fff !important;
+}
+
+.hero-cta-hr {
+  color: var(--blue-700) !important;
+  font-weight: 700;
+  text-transform: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12) !important;
 }
 
 .hero-kicker {

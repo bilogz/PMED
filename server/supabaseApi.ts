@@ -2323,7 +2323,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
         const pool = await getPool(options);
         const url = new URL(req.url || '', 'http://localhost');
 
-        if (!pool || !['/api/appointments', '/api/doctors', '/api/doctor-availability', '/api/registrations', '/api/walk-ins', '/api/checkups', '/api/laboratory', '/api/pharmacy', '/api/mental-health', '/api/patients', '/api/admin-auth', '/api/admin-profile', '/api/module-activity', '/api/reports', '/api/dashboard', '/api/pmed/planning', '/api/pmed/data-collection', '/api/pmed/monitoring', '/api/pmed/evaluation', '/api/pmed/reporting', '/api/pmed/enrollment-statistics', '/api/pmed/exchange-board', '/api/integrations/cashier/status', '/api/integrations/cashier/queue', '/api/integrations/cashier/sync', '/api/integrations/cashier/payment-status', '/api/integrations/departments/map', '/api/integrations/departments/records'].includes(url.pathname)) {
+        if (!pool || !['/api/appointments', '/api/doctors', '/api/doctor-availability', '/api/registrations', '/api/walk-ins', '/api/checkups', '/api/laboratory', '/api/pharmacy', '/api/mental-health', '/api/patients', '/api/admin-auth', '/api/admin-profile', '/api/module-activity', '/api/reports', '/api/dashboard', '/api/pmed/planning', '/api/pmed/data-collection', '/api/pmed/monitoring', '/api/pmed/evaluation', '/api/pmed/reporting', '/api/pmed/reporting-debug', '/api/pmed/enrollment-statistics', '/api/pmed/exchange-board', '/api/pmed/comlab-report-verification', '/api/integrations/cashier/status', '/api/integrations/cashier/queue', '/api/integrations/cashier/sync', '/api/integrations/cashier/payment-status', '/api/integrations/departments/map', '/api/integrations/departments/records'].includes(url.pathname)) {
           next();
           return;
         }
@@ -2957,11 +2957,12 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                        WHERE LOWER(source_module) = 'pmed'`
                     )
                   : [[], null];
-                const [clearanceRows] = !eventRows.length && clearanceRelation
+                const [clearanceRows] = clearanceRelation
                   ? await pool.query<RowDataPacket[]>(
-                      `SELECT clearance_reference, status, remarks, approver_name, external_reference, metadata, created_at, updated_at
+                      `SELECT clearance_reference, department_key, status, remarks, approver_name, external_reference, metadata, created_at, updated_at
                        FROM ${clearanceRelation}
                        WHERE LOWER(department_key) = 'pmed'
+                          OR LOWER(COALESCE(metadata->>'target_department', '')) = 'pmed'
                        ORDER BY updated_at DESC, clearance_reference DESC`
                     )
                   : [[], null];
@@ -3791,6 +3792,73 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                 (await relationExists(pool, 'pmed.module_activity_logs')) ? 'pmed.module_activity_logs' :
                 '';
               const loadExternalDepartmentReportDeliveries = async () => {
+                const loadRegistrarReportQueueDeliveries = async () => {
+                  const registrarReportQueueRelation =
+                    (await relationExists(pool, 'public.pmed_report_queue_feed')) ? 'public.pmed_report_queue_feed' :
+                    (await relationExists(pool, 'pmed.pmed_report_queue_feed')) ? 'pmed.pmed_report_queue_feed' :
+                    '';
+
+                  if (!registrarReportQueueRelation) {
+                    return { reports: [] as Array<Record<string, unknown>>, activityLogs: [] as Array<Record<string, unknown>> };
+                  }
+
+                  const [rows] = await pool.query<RowDataPacket[]>(
+                    `SELECT id, batch_id, source, office, report_count, student_statuses, total_grade_records, payload, sent_at, created_at
+                     FROM ${registrarReportQueueRelation}
+                     ORDER BY COALESCE(sent_at, created_at) DESC, id DESC
+                     LIMIT 24`
+                  );
+
+                  const reports = rows.map((row, index) => {
+                    const payload = parseJsonRecord(row.payload);
+                    const packageSummary = {
+                      section_count: Number(payload?.registrar_snapshot?.workflow_reports?.length || 0),
+                      metric_count: Number(row.report_count || 0) + Number(row.total_grade_records || 0),
+                      sources: [toSafeText(row.source) || 'Registrar']
+                    };
+                    const packageSections = Array.isArray(payload?.registrar_snapshot?.workflow_reports)
+                      ? (payload.registrar_snapshot.workflow_reports as Array<Record<string, unknown>>).map((section) => ({
+                          title: toSafeText(section.label || section.title || section.workflow_key) || 'Registrar Workflow Report',
+                          description: `${toSafeText(section.title) || 'Registrar report'} (${Number(section.total_rows || 0)} rows)`,
+                          source: 'Registrar',
+                          metrics: [
+                            { key: 'total_rows', value: Number(section.total_rows || 0) }
+                          ]
+                        }))
+                      : [];
+
+                    return {
+                      id: toSafeText(payload.report_summary?.batch_id || row.batch_id || `REGISTRAR-PMED-${index + 1}`),
+                      planReference: toSafeText(payload.generated_at || row.sent_at || row.created_at),
+                      reportName: 'Registrar Reports Package for PMED',
+                      reportType: 'Registrar Report Queue',
+                      sourceDepartment: toSafeText(row.source) || 'Registrar',
+                      ownerName: 'Registrar Reporting Desk',
+                      exportFormat: 'JSON',
+                      generatedAt: formatDateTimeCell(row.sent_at || row.created_at),
+                      deliveryStatus: 'Received',
+                      archiveStatus: 'Active',
+                      fileUrl: '',
+                      administrationSentAt: '',
+                      isExternalDelivery: true,
+                      packageSummary,
+                      packageSections
+                    };
+                  });
+
+                  const activityLogs = rows.map((row, index) => ({
+                    id: 850000 + index,
+                    reference: toSafeText(row.batch_id || row.id),
+                    action: 'Department Report Received',
+                    detail: `Registrar sent ${toSafeInt(row.report_count, 0)} report rows with ${toSafeInt(row.total_grade_records, 0)} grade records to PMED.`,
+                    actor: 'Registrar Reporting Desk',
+                    tone: 'success' as const,
+                    createdAt: formatDateTimeCell(row.sent_at || row.created_at)
+                  }));
+
+                  return { reports, activityLogs };
+                };
+
                 const loadComlabBridgeDeliveries = async () => {
                   const comlabDocumentsRelation =
                     (await relationExists(pool, 'public.comlab_integration_documents')) ? 'public.comlab_integration_documents' :
@@ -3890,16 +3958,117 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                   return { reports, activityLogs };
                 };
                 const comlabBridgeDeliveries = await loadComlabBridgeDeliveries();
+                const registrarReportQueueDeliveries = await loadRegistrarReportQueueDeliveries();
+                const clearanceRelation =
+                  (await relationExists(pool, 'clinic.department_clearance_records')) ? 'clinic.department_clearance_records' :
+                  (await relationExists(pool, 'pmed.department_clearance_records')) ? 'pmed.department_clearance_records' :
+                  (await relationExists(pool, 'public.department_clearance_records')) ? 'public.department_clearance_records' :
+                  '';
+
+                const [clearanceRows] = clearanceRelation
+                  ? await pool.query<RowDataPacket[]>(
+                      `SELECT clearance_reference, department_key, status, approver_name, external_reference, metadata, created_at, updated_at
+                       FROM ${clearanceRelation}
+                       WHERE (
+                         LOWER(COALESCE(metadata->>'target_department', '')) = 'pmed'
+                         OR LOWER(COALESCE(metadata->>'target_department_name', '')) LIKE '%pmed%'
+                         OR LOWER(COALESCE(metadata->>'target_key', '')) = 'pmed'
+                         OR LOWER(COALESCE(metadata->>'target_key', '')) LIKE '%pmed%'
+                       )
+                       ORDER BY updated_at DESC, clearance_reference DESC
+                       LIMIT 48`
+                    )
+                  : [[], null];
+                const clearanceReports = clearanceRows
+                  .filter((row) => {
+                    const metadata = parseJsonRecord(row.metadata);
+                    const sourceDepartment = toSafeText(metadata.source_department || row.department_key).toLowerCase();
+                    const reportReference = toSafeText(metadata.report_reference || row.external_reference || row.clearance_reference);
+                    const reportName = toSafeText(metadata.report_name);
+                    const stage = toSafeText(metadata.stage).toLowerCase();
+                    const isReportingRow = stage.includes('report') || Boolean(reportReference) || Boolean(reportName);
+                    return reportingDepartmentKeys.includes(sourceDepartment) && isReportingRow;
+                  })
+                  .map((row, index) => {
+                    const metadata = parseJsonRecord(row.metadata);
+                    const sourceDepartmentName =
+                      toSafeText(metadata.source_department_name) ||
+                      deriveSourceDepartment(
+                        toSafeText(metadata.source_department || row.department_key),
+                        toSafeText(metadata.report_type),
+                        toSafeText(metadata.report_name)
+                      );
+                    const deliveryStatus =
+                      toSafeText(metadata.delivery_status) ||
+                      (toSafeText(row.status).toLowerCase() === 'approved' ? 'Received' : 'Awaiting Department');
+                    return {
+                      id: toSafeText(metadata.report_reference || row.external_reference || row.clearance_reference || `CLEARANCE-PMED-${index + 1}`),
+                      planReference: toSafeText(metadata.plan_reference),
+                      reportName: toSafeText(metadata.report_name) || `${sourceDepartmentName} PMED Report Package`,
+                      reportType: toSafeText(metadata.report_type) || `${sourceDepartmentName} Report`,
+                      sourceDepartment: sourceDepartmentName,
+                      ownerName: toSafeText(metadata.owner_name || row.approver_name) || `${sourceDepartmentName} Reports`,
+                      exportFormat: toSafeText(metadata.export_format) || 'JSON',
+                      generatedAt: formatDateTimeCell(row.updated_at || row.created_at),
+                      deliveryStatus,
+                      archiveStatus: toSafeText(metadata.archive_status) || 'Active',
+                      fileUrl: toSafeText(metadata.file_url),
+                      administrationSentAt: '',
+                      isExternalDelivery: true
+                    };
+                  });
+                const clearanceActivityLogs = clearanceRows.slice(0, 24).map((row, index) => {
+                  const metadata = parseJsonRecord(row.metadata);
+                  const sourceDepartmentName =
+                    toSafeText(metadata.source_department_name) ||
+                    deriveSourceDepartment(
+                      toSafeText(metadata.source_department || row.department_key),
+                      toSafeText(metadata.report_type),
+                      toSafeText(metadata.report_name)
+                    );
+                  return {
+                    id: 700000 + index,
+                    reference: toSafeText(metadata.report_reference || row.external_reference || row.clearance_reference),
+                    action: 'Department Report Received',
+                    detail: `${sourceDepartmentName} submitted ${toSafeText(metadata.report_name) || 'a PMED report package'}.`,
+                    actor: toSafeText(metadata.owner_name || row.approver_name) || `${sourceDepartmentName} Reports`,
+                    tone: 'success' as const,
+                    createdAt: formatDateTimeCell(row.updated_at || row.created_at)
+                  };
+                });
 
                 if (!moduleActivityRelation) {
-                  return comlabBridgeDeliveries;
+                  const mergedReports = Array.from(
+                    [...clearanceReports, ...comlabBridgeDeliveries.reports, ...registrarReportQueueDeliveries.reports].reduce((map, report) => {
+                      const sourceDepartment = toSafeText(report.sourceDepartment).toLowerCase() || 'external';
+                      const reportType = toSafeText(report.reportType).toLowerCase();
+                      const reportName = toSafeText(report.reportName).toLowerCase();
+                      const groupKey =
+                        reportType && !reportType.includes('consolidated')
+                          ? `${sourceDepartment}|${reportType}`
+                          : `${sourceDepartment}|${reportName}`;
+                      if (!map.has(groupKey)) {
+                        map.set(groupKey, report);
+                      }
+                      return map;
+                    }, new Map<string, Record<string, unknown>>()).values()
+                  );
+                  const mergedActivityLogs = [...clearanceActivityLogs, ...comlabBridgeDeliveries.activityLogs, ...registrarReportQueueDeliveries.activityLogs]
+                    .sort((left, right) => new Date(String(right.createdAt || '')).getTime() - new Date(String(left.createdAt || '')).getTime())
+                    .slice(0, 24);
+                  return { reports: mergedReports, activityLogs: mergedActivityLogs };
                 }
 
                 const [departmentReportRows] = await pool.query<RowDataPacket[]>(
                   `SELECT id, action, detail, actor, entity_key, metadata, created_at
                    FROM ${moduleActivityRelation}
                    WHERE LOWER(module) = 'department_reports'
-                     AND LOWER(COALESCE(metadata->>'target_key', metadata->>'target_department', '')) = 'pmed'
+                     AND (
+                       LOWER(COALESCE(metadata->>'target_department', '')) = 'pmed'
+                       OR LOWER(COALESCE(metadata->>'target_department_name', '')) LIKE '%pmed%'
+                       OR LOWER(COALESCE(metadata->>'target_key', '')) = 'pmed'
+                       OR LOWER(COALESCE(metadata->>'target_key', '')) LIKE '%pmed%'
+                     )
                    ORDER BY created_at DESC
                    LIMIT 24`
                 );
@@ -3939,7 +4108,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                   };
                 });
                 const dedupedReports = Array.from(
-                  [...reports, ...comlabBridgeDeliveries.reports].reduce((map, report) => {
+                  [...reports, ...clearanceReports, ...comlabBridgeDeliveries.reports, ...registrarReportQueueDeliveries.reports].reduce((map, report) => {
                     const sourceDepartment = toSafeText(report.sourceDepartment).toLowerCase() || 'external';
                     const reportType = toSafeText(report.reportType).toLowerCase();
                     const reportName = toSafeText(report.reportName).toLowerCase();
@@ -3974,7 +4143,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                   };
                 });
 
-                const mergedActivityLogs = [...activityLogs, ...comlabBridgeDeliveries.activityLogs]
+                const mergedActivityLogs = [...activityLogs, ...clearanceActivityLogs, ...comlabBridgeDeliveries.activityLogs, ...registrarReportQueueDeliveries.activityLogs]
                   .sort((left, right) => new Date(String(right.createdAt || '')).getTime() - new Date(String(left.createdAt || '')).getTime())
                   .slice(0, 24);
 
@@ -4005,11 +4174,12 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                        ORDER BY updated_at DESC, event_key DESC`
                     )
                   : [[], null];
-                const [clearanceRows] = !eventRows.length && clearanceRelation
+                const [clearanceRows] = clearanceRelation
                   ? await pool.query<RowDataPacket[]>(
-                      `SELECT clearance_reference, status, remarks, approver_name, external_reference, metadata, created_at, updated_at
+                      `SELECT clearance_reference, department_key, status, remarks, approver_name, external_reference, metadata, created_at, updated_at
                        FROM ${clearanceRelation}
                        WHERE LOWER(department_key) = 'pmed'
+                          OR LOWER(COALESCE(metadata->>'target_department', '')) = 'pmed'
                        ORDER BY updated_at DESC, clearance_reference DESC`
                     )
                   : [[], null];
@@ -4032,58 +4202,71 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                   return sourceEntity === 'report' || stage.includes('report');
                 });
 
-                const internalReports = filteredEventRows.length
-                  ? filteredEventRows.map((row, index) => {
-                      const payload = parseJsonRecord(row.payload);
-                      const sourceDepartment = normalizeDepartmentName(
-                        toSafeText(payload.source_department) || deriveSourceDepartment(toSafeText(row.source_module), toSafeText(payload.report_type), toSafeText(payload.report_name))
-                      );
-                      const deliveryStatus =
-                        toSafeText(payload.delivery_status) ||
-                        (toSafeText(payload.target_department).toLowerCase() === 'pmed'
-                          ? (toSafeText(row.sync_status).toLowerCase() === 'pending' ? 'Awaiting Department' : 'Received')
-                          : toSafeText(row.sync_status).toLowerCase() === 'sent'
-                          ? 'Sent to Administration'
-                          : toSafeText(row.payment_status).toLowerCase() === 'partial'
-                            ? 'Awaiting Approval'
-                            : 'Draft');
-                      const archiveStatus = toSafeText(payload.archive_status) || 'Active';
-                      return {
-                        id: toSafeText(payload.report_reference || row.reference_no || row.event_key || `RPT-${index + 1}`),
-                        planReference: toSafeText(payload.plan_reference || row.source_key),
-                        reportName: toSafeText(payload.report_name || payload.program || 'PMED release output'),
-                        reportType: toSafeText(payload.report_type || (sourceDepartment === 'PMED' ? 'Consolidated PMED Report' : `${sourceDepartment} Report`)),
-                        sourceDepartment,
-                        ownerName: toSafeText(payload.owner_name) || 'Reports Analyst',
-                        exportFormat: toSafeText(payload.export_format) || 'PDF',
-                        generatedAt: formatDateTimeCell(row.updated_at || row.created_at),
-                        deliveryStatus,
-                        archiveStatus,
-                        fileUrl: toSafeText(payload.file_url),
-                        administrationSentAt: deliveryStatus === 'Sent to Administration' ? formatDateTimeCell(row.updated_at || row.created_at) : ''
-                      };
-                    })
-                  : clearanceRows.map((row, index) => {
-                      const metadata = parseJsonRecord(row.metadata);
-                      const sourceDepartment = normalizeDepartmentName(
-                        toSafeText(metadata.source_department) || deriveSourceDepartment(toSafeText(row.department_key), toSafeText(metadata.report_type), toSafeText(metadata.report_name))
-                      );
-                      const deliveryStatus = toSafeText(metadata.delivery_status) || (toSafeText(row.status).toLowerCase() === 'approved' ? 'Ready to Send' : 'Draft');
-                      return {
-                        id: toSafeText(metadata.report_reference || row.external_reference || row.clearance_reference || `RPT-${index + 1}`),
-                        planReference: toSafeText(metadata.plan_reference || row.external_reference),
-                        reportName: toSafeText(metadata.report_name) || 'PMED release output',
-                        reportType: toSafeText(metadata.report_type || (sourceDepartment === 'PMED' ? 'Consolidated PMED Report' : `${sourceDepartment} Report`)),
-                        sourceDepartment,
-                        ownerName: toSafeText(metadata.owner_name || row.approver_name) || 'PMED Reporting Desk',
-                        exportFormat: toSafeText(metadata.export_format) || 'PDF',
-                        generatedAt: formatDateTimeCell(row.updated_at || row.created_at),
-                        deliveryStatus,
-                        archiveStatus: toSafeText(metadata.archive_status) || 'Active',
-                        fileUrl: toSafeText(metadata.file_url),
-                        administrationSentAt: deliveryStatus === 'Sent to Administration' ? formatDateTimeCell(row.updated_at || row.created_at) : ''
-                      };
-                    });
+                const eventBasedReports = filteredEventRows.map((row, index) => {
+                  const payload = parseJsonRecord(row.payload);
+                  const sourceDepartment = normalizeDepartmentName(
+                    toSafeText(payload.source_department) || deriveSourceDepartment(toSafeText(row.source_module), toSafeText(payload.report_type), toSafeText(payload.report_name))
+                  );
+                  const deliveryStatus =
+                    toSafeText(payload.delivery_status) ||
+                    (toSafeText(payload.target_department).toLowerCase() === 'pmed'
+                      ? (toSafeText(row.sync_status).toLowerCase() === 'pending' ? 'Awaiting Department' : 'Received')
+                      : toSafeText(row.sync_status).toLowerCase() === 'sent'
+                      ? 'Sent to Administration'
+                      : toSafeText(row.payment_status).toLowerCase() === 'partial'
+                        ? 'Awaiting Approval'
+                        : 'Draft');
+                  const archiveStatus = toSafeText(payload.archive_status) || 'Active';
+                  return {
+                    id: toSafeText(payload.report_reference || row.reference_no || row.event_key || `RPT-${index + 1}`),
+                    planReference: toSafeText(payload.plan_reference || row.source_key),
+                    reportName: toSafeText(payload.report_name || payload.program || 'PMED release output'),
+                    reportType: toSafeText(payload.report_type || (sourceDepartment === 'PMED' ? 'Consolidated PMED Report' : `${sourceDepartment} Report`)),
+                    sourceDepartment,
+                    ownerName: toSafeText(payload.owner_name) || 'Reports Analyst',
+                    exportFormat: toSafeText(payload.export_format) || 'PDF',
+                    generatedAt: formatDateTimeCell(row.updated_at || row.created_at),
+                    deliveryStatus,
+                    archiveStatus,
+                    fileUrl: toSafeText(payload.file_url),
+                    administrationSentAt: deliveryStatus === 'Sent to Administration' ? formatDateTimeCell(row.updated_at || row.created_at) : ''
+                  };
+                });
+                const clearanceBasedReports = clearanceRows
+                  .filter((row) => {
+                    const metadata = parseJsonRecord(row.metadata);
+                    const hasReportIdentity =
+                      Boolean(toSafeText(metadata.report_reference)) || Boolean(toSafeText(metadata.report_name));
+                    const reportStage = toSafeText(metadata.stage).toLowerCase();
+                    const sourceEntity = toSafeText(metadata.source_entity).toLowerCase();
+                    const clearanceReference = toSafeText(row.clearance_reference).toUpperCase();
+                    // Ignore flow-only synchronization rows that do not represent
+                    // an actual report package delivered to PMED.
+                    if (clearanceReference.startsWith('FLOW-')) return false;
+                    return hasReportIdentity || (reportStage.includes('report') && sourceEntity === 'report');
+                  })
+                  .map((row, index) => {
+                    const metadata = parseJsonRecord(row.metadata);
+                  const sourceDepartment = normalizeDepartmentName(
+                    toSafeText(metadata.source_department) || deriveSourceDepartment(toSafeText(row.department_key), toSafeText(metadata.report_type), toSafeText(metadata.report_name))
+                  );
+                  const deliveryStatus = toSafeText(metadata.delivery_status) || (toSafeText(row.status).toLowerCase() === 'approved' ? 'Ready to Send' : 'Draft');
+                  return {
+                    id: toSafeText(metadata.report_reference || row.external_reference || row.clearance_reference || `RPT-${index + 1}`),
+                    planReference: toSafeText(metadata.plan_reference || row.external_reference),
+                    reportName: toSafeText(metadata.report_name) || 'PMED release output',
+                    reportType: toSafeText(metadata.report_type || (sourceDepartment === 'PMED' ? 'Consolidated PMED Report' : `${sourceDepartment} Report`)),
+                    sourceDepartment,
+                    ownerName: toSafeText(metadata.owner_name || row.approver_name) || 'PMED Reporting Desk',
+                    exportFormat: toSafeText(metadata.export_format) || 'PDF',
+                    generatedAt: formatDateTimeCell(row.updated_at || row.created_at),
+                    deliveryStatus,
+                    archiveStatus: toSafeText(metadata.archive_status) || 'Active',
+                    fileUrl: toSafeText(metadata.file_url),
+                    administrationSentAt: deliveryStatus === 'Sent to Administration' ? formatDateTimeCell(row.updated_at || row.created_at) : ''
+                  };
+                  });
+                const internalReports = [...eventBasedReports, ...clearanceBasedReports];
                 const reports = Array.from(
                   new Map(
                     [...externalDeliveries.reports, ...internalReports].map((item) => [toSafeText((item as Record<string, unknown>).id), item])
@@ -4582,6 +4765,133 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
             }
           }
 
+          if (url.pathname === '/api/pmed/reporting-debug') {
+            if ((req.method || 'GET').toUpperCase() !== 'GET') {
+              writeJson(res, 405, { ok: false, message: 'Method not allowed.' });
+              return;
+            }
+
+            const eventRelation =
+              (await relationExists(pool, 'clinic.cashier_integration_events')) ? 'clinic.cashier_integration_events' :
+              (await relationExists(pool, 'pmed.cashier_integration_events')) ? 'pmed.cashier_integration_events' :
+              (await relationExists(pool, 'public.cashier_integration_events')) ? 'public.cashier_integration_events' :
+              '';
+            const clearanceRelation =
+              (await relationExists(pool, 'clinic.department_clearance_records')) ? 'clinic.department_clearance_records' :
+              (await relationExists(pool, 'pmed.department_clearance_records')) ? 'pmed.department_clearance_records' :
+              (await relationExists(pool, 'public.department_clearance_records')) ? 'public.department_clearance_records' :
+              '';
+            const hasStandaloneReports = await relationExists(pool, 'public.pmed_reports');
+
+            const [eventRows] = eventRelation
+              ? await pool.query<RowDataPacket[]>(
+                  `SELECT event_key, source_module, source_entity, source_key, reference_no, sync_status, payload, updated_at
+                   FROM ${eventRelation}
+                   WHERE LOWER(source_module) IN ('pmed', 'clinic', 'cashier', 'guidance', 'prefect', 'comlab', 'crad', 'hr')
+                   ORDER BY updated_at DESC, event_key DESC
+                   LIMIT 200`
+                )
+              : [[], null];
+            const [clearanceRows] = clearanceRelation
+              ? await pool.query<RowDataPacket[]>(
+                  `SELECT clearance_reference, department_key, status, external_reference, metadata, updated_at
+                   FROM ${clearanceRelation}
+                   WHERE LOWER(department_key) = 'pmed'
+                      OR LOWER(COALESCE(metadata->>'target_department', '')) = 'pmed'
+                   ORDER BY updated_at DESC, clearance_reference DESC
+                   LIMIT 200`
+                )
+              : [[], null];
+
+            const eventPrefectRows = eventRows.filter((row) => {
+              const payload = parseJsonRecord(row.payload);
+              const sourceModule = toSafeText(row.source_module).toLowerCase();
+              const sourceDepartment = toSafeText(payload.source_department).toLowerCase();
+              const targetDepartment = toSafeText(payload.target_department).toLowerCase();
+              return sourceModule === 'prefect' || sourceDepartment === 'prefect' || targetDepartment === 'pmed';
+            });
+
+            const eventPrefectMapped = eventPrefectRows
+              .filter((row) => {
+                const payload = parseJsonRecord(row.payload);
+                const sourceEntity = toSafeText(row.source_entity).toLowerCase();
+                const stage = toSafeText(payload.stage).toLowerCase();
+                return sourceEntity === 'report' || stage.includes('report');
+              })
+              .map((row) => {
+                const payload = parseJsonRecord(row.payload);
+                return {
+                  id: toSafeText(payload.report_reference || row.reference_no || row.event_key),
+                  source_module: toSafeText(row.source_module),
+                  source_department: toSafeText(payload.source_department),
+                  target_department: toSafeText(payload.target_department),
+                  report_reference: toSafeText(payload.report_reference),
+                  report_name: toSafeText(payload.report_name),
+                  report_type: toSafeText(payload.report_type),
+                  delivery_status: toSafeText(payload.delivery_status),
+                  sync_status: toSafeText(row.sync_status),
+                  updated_at: formatDateTimeCell(row.updated_at)
+                };
+              });
+
+            const clearancePrefectRows = clearanceRows
+              .filter((row) => {
+                const metadata = parseJsonRecord(row.metadata);
+                const sourceDepartment = toSafeText(metadata.source_department).toLowerCase();
+                const targetDepartment = toSafeText(metadata.target_department).toLowerCase();
+                return sourceDepartment === 'prefect' || targetDepartment === 'pmed';
+              })
+              .map((row) => {
+                const metadata = parseJsonRecord(row.metadata);
+                const clearanceReference = toSafeText(row.clearance_reference).toUpperCase();
+                const hasReportIdentity =
+                  Boolean(toSafeText(metadata.report_reference)) || Boolean(toSafeText(metadata.report_name));
+                const reportStage = toSafeText(metadata.stage).toLowerCase();
+                const sourceEntity = toSafeText(metadata.source_entity).toLowerCase();
+                const includedByWorkspace = !clearanceReference.startsWith('FLOW-') && (hasReportIdentity || (reportStage.includes('report') && sourceEntity === 'report'));
+                return {
+                  clearance_reference: toSafeText(row.clearance_reference),
+                  department_key: toSafeText(row.department_key),
+                  status: toSafeText(row.status),
+                  external_reference: toSafeText(row.external_reference),
+                  source_department: toSafeText(metadata.source_department),
+                  target_department: toSafeText(metadata.target_department),
+                  source_entity: toSafeText(metadata.source_entity),
+                  stage: toSafeText(metadata.stage),
+                  report_reference: toSafeText(metadata.report_reference),
+                  report_name: toSafeText(metadata.report_name),
+                  report_type: toSafeText(metadata.report_type),
+                  delivery_status: toSafeText(metadata.delivery_status),
+                  included_by_workspace: includedByWorkspace,
+                  updated_at: formatDateTimeCell(row.updated_at)
+                };
+              });
+
+            writeJson(res, 200, {
+              ok: true,
+              data: {
+                has_standalone_reports: hasStandaloneReports,
+                relations: {
+                  event_relation: eventRelation || null,
+                  clearance_relation: clearanceRelation || null
+                },
+                counts: {
+                  event_rows_total: eventRows.length,
+                  clearance_rows_total: clearanceRows.length,
+                  prefect_event_rows: eventPrefectRows.length,
+                  prefect_event_rows_mapped: eventPrefectMapped.length,
+                  prefect_clearance_rows: clearancePrefectRows.length,
+                  prefect_clearance_rows_included: clearancePrefectRows.filter((row) => row.included_by_workspace).length
+                },
+                samples: {
+                  prefect_event_rows_mapped: eventPrefectMapped.slice(0, 20),
+                  prefect_clearance_rows: clearancePrefectRows.slice(0, 30)
+                }
+              }
+            });
+            return;
+          }
+
           if (url.pathname === '/api/pmed/enrollment-statistics') {
             const loadEnrollmentStatisticsWorkspace = async () => {
               const statisticsRelation = await resolvePmedEnrollmentStatisticsRelation(pool);
@@ -4870,7 +5180,16 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
               const body = await readJsonBody(req);
               const action = toSafeText(body.action).toLowerCase();
               const actor = toSafeText(body.actor) || 'PMED Exchange Desk';
-              const targetDepartment = findDepartmentIntegrationDefinition(toSafeText(body.target_department));
+              const requestType = toSafeText(body.request_type).toLowerCase();
+              const essentialsCategory = toSafeText(body.essentials_category);
+              const quantity = Number(body.quantity || 0);
+              const resolvedTargetDepartmentKey =
+                requestType === 'employee_request'
+                  ? 'hr'
+                  : requestType === 'comlab_essentials'
+                    ? 'comlab'
+                    : toSafeText(body.target_department);
+              const targetDepartment = findDepartmentIntegrationDefinition(resolvedTargetDepartmentKey);
               const recordReference = toSafeText(body.record_reference) || `EX-${Date.now()}`;
 
               if (action === 'request_exchange') {
@@ -4909,6 +5228,9 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                       stage: toSafeText(body.stage) || 'exchange',
                       source_department: 'pmed',
                       target_department: targetDepartment.key,
+                      request_type: requestType || 'general',
+                      essentials_category: essentialsCategory || null,
+                      quantity: quantity > 0 ? quantity : null,
                       report_name: toSafeText(body.title) || `${targetDepartment.name} exchange request`,
                       detail: toSafeText(body.detail) || null
                     })
@@ -4978,6 +5300,9 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                       stage: toSafeText(body.stage) || 'exchange',
                       source_department: 'pmed',
                       target_department: targetDepartment.key,
+                      request_type: requestType || 'general',
+                      essentials_category: essentialsCategory || null,
+                      quantity: quantity > 0 ? quantity : null,
                       report_name: toSafeText(body.title) || `${targetDepartment.name} dispatch`,
                       detail: toSafeText(body.detail) || null
                     })
@@ -4991,6 +5316,196 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
               writeJson(res, 422, { ok: false, message: 'Unsupported PMED exchange board action.' });
               return;
             }
+          }
+
+          if (url.pathname === '/api/pmed/comlab-report-verification') {
+            const comlabDocumentsRelation =
+              (await relationExists(pool, 'public.comlab_integration_documents')) ? 'public.comlab_integration_documents' :
+              (await relationExists(pool, 'comlab.integration_documents')) ? 'comlab.integration_documents' :
+              '';
+            const comlabDepartmentsRelation =
+              (await relationExists(pool, 'public.comlab_departments')) ? 'public.comlab_departments' :
+              (await relationExists(pool, 'comlab.departments')) ? 'comlab.departments' :
+              '';
+
+            if (!comlabDocumentsRelation) {
+              writeJson(res, 409, { ok: false, message: 'COMLAB integration document table is not available.' });
+              return;
+            }
+
+            const loadVerificationWorkspace = async () => {
+              const departmentJoin = comlabDepartmentsRelation
+                ? `LEFT JOIN ${comlabDepartmentsRelation} sd ON sd.department_id = d.sender_department_id
+                   LEFT JOIN ${comlabDepartmentsRelation} rd ON rd.department_id = d.receiver_department_id`
+                : '';
+
+              const [rows] = await pool.query<RowDataPacket[]>(
+                `SELECT d.document_id, d.title, d.status, d.subject_ref, d.payload,
+                        d.sent_at, d.received_at, d.acknowledged_at, d.created_at, d.updated_at,
+                        ${comlabDepartmentsRelation ? 'COALESCE(sd.department_code, \'COMLAB\')' : '\'COMLAB\''} AS sender_department_code,
+                        ${comlabDepartmentsRelation ? 'COALESCE(rd.department_code, \'PMED\')' : '\'PMED\''} AS receiver_department_code
+                 FROM ${comlabDocumentsRelation} d
+                 ${departmentJoin}
+                 WHERE UPPER(${comlabDepartmentsRelation ? 'COALESCE(sd.department_code, \'COMLAB\')' : '\'COMLAB\''}) = 'COMLAB'
+                   AND UPPER(${comlabDepartmentsRelation ? 'COALESCE(rd.department_code, \'PMED\')' : '\'PMED\''}) = 'PMED'
+                 ORDER BY d.updated_at DESC
+                 LIMIT 120`
+              );
+
+              const records = rows.map((row) => {
+                const payload = parseJsonRecord(row.payload);
+                const workflow = parseJsonRecord(payload.workflow);
+                const stage = toSafeText(workflow.stage).toLowerCase();
+                const status = toSafeText(row.status).toLowerCase();
+                const category = toSafeText(workflow.report_category || 'operations_report');
+                const canVerify = (stage === '' || stage === 'submitted_by_comlab') && ['sent', 'received'].includes(status);
+                const canReturn = stage === 'verified_by_pmed' || status === 'acknowledged';
+
+                return {
+                  documentId: toSafeText(row.document_id),
+                  title: toSafeText(row.title) || 'COMLAB report',
+                  subjectRef: toSafeText(row.subject_ref),
+                  reportCategory: category,
+                  itemReference: toSafeText(workflow.item_reference),
+                  quantity: toSafeInt(workflow.quantity, 0),
+                  status: toSafeText(row.status),
+                  workflowStage: stage || 'submitted_by_comlab',
+                  workflowLabel:
+                    stage === 'verified_by_pmed'
+                      ? 'Verified by PMED'
+                      : stage === 'returned_to_comlab'
+                        ? 'Returned to COMLAB'
+                        : stage === 'confirmed_by_comlab'
+                          ? 'Confirmed by COMLAB'
+                          : 'Submitted by COMLAB',
+                  details: toSafeText(workflow.details || ''),
+                  pmedVerificationNotes: toSafeText(workflow.pmed_verification_notes || ''),
+                  pmedReturnNotes: toSafeText(workflow.pmed_return_notes || ''),
+                  submittedAt: formatDateTimeCell(workflow.submitted_at || row.created_at),
+                  updatedAt: formatDateTimeCell(row.updated_at || row.created_at),
+                  canVerify,
+                  canReturn
+                };
+              });
+
+              return {
+                summary: {
+                  total: records.length,
+                  pendingVerification: records.filter((record) => record.canVerify).length,
+                  verified: records.filter((record) => record.workflowStage === 'verified_by_pmed').length,
+                  returned: records.filter((record) => record.workflowStage === 'returned_to_comlab').length,
+                  closed: records.filter((record) => record.workflowStage === 'confirmed_by_comlab').length
+                },
+                records
+              };
+            };
+
+            if ((req.method || 'GET').toUpperCase() === 'GET') {
+              writeJson(res, 200, { ok: true, data: await loadVerificationWorkspace() });
+              return;
+            }
+
+            if ((req.method || '').toUpperCase() === 'POST') {
+              const body = await readJsonBody(req);
+              const action = toSafeText(body.action).toLowerCase();
+              const documentId = toSafeText(body.document_id);
+              const notes = toSafeText(body.notes);
+              const actor = toSafeText(body.actor) || 'PMED Verification Desk';
+              if (!documentId) {
+                writeJson(res, 422, { ok: false, message: 'document_id is required.' });
+                return;
+              }
+              if (!['pmed_verify_report', 'pmed_return_report'].includes(action)) {
+                writeJson(res, 422, { ok: false, message: 'Unsupported PMED verification action.' });
+                return;
+              }
+
+              const departmentJoin = comlabDepartmentsRelation
+                ? `LEFT JOIN ${comlabDepartmentsRelation} sd ON sd.department_id = d.sender_department_id
+                   LEFT JOIN ${comlabDepartmentsRelation} rd ON rd.department_id = d.receiver_department_id`
+                : '';
+
+              const [docRows] = await pool.query<RowDataPacket[]>(
+                `SELECT d.document_id, d.status, d.payload,
+                        ${comlabDepartmentsRelation ? 'COALESCE(sd.department_code, \'COMLAB\')' : '\'COMLAB\''} AS sender_department_code,
+                        ${comlabDepartmentsRelation ? 'COALESCE(rd.department_code, \'PMED\')' : '\'PMED\''} AS receiver_department_code
+                 FROM ${comlabDocumentsRelation} d
+                 ${departmentJoin}
+                 WHERE d.document_id = ?
+                 LIMIT 1`,
+                [documentId]
+              );
+              const current = docRows[0];
+              if (!current) {
+                writeJson(res, 404, { ok: false, message: 'COMLAB report document not found.' });
+                return;
+              }
+              if (toSafeText(current.sender_department_code).toUpperCase() !== 'COMLAB' || toSafeText(current.receiver_department_code).toUpperCase() !== 'PMED') {
+                writeJson(res, 422, { ok: false, message: 'This document does not belong to the COMLAB to PMED workflow.' });
+                return;
+              }
+
+              const payload = parseJsonRecord(current.payload);
+              const workflow = parseJsonRecord(payload.workflow);
+              const status = toSafeText(current.status).toLowerCase();
+              const stage = toSafeText(workflow.stage).toLowerCase();
+              const nowIso = new Date().toISOString();
+
+              if (action === 'pmed_verify_report') {
+                if (!['sent', 'received'].includes(status) || !['', 'submitted_by_comlab'].includes(stage)) {
+                  writeJson(res, 409, { ok: false, message: 'Only newly submitted COMLAB reports can be PMED-verified.' });
+                  return;
+                }
+                workflow.stage = 'verified_by_pmed';
+                workflow.pmed_verified_at = nowIso;
+                if (notes) workflow.pmed_verification_notes = notes;
+                payload.workflow = workflow;
+
+                await pool.query(
+                  `UPDATE ${comlabDocumentsRelation}
+                   SET status = 'acknowledged',
+                       payload = CAST(? AS jsonb),
+                       received_at = COALESCE(received_at, CURRENT_TIMESTAMP),
+                       acknowledged_at = COALESCE(acknowledged_at, CURRENT_TIMESTAMP),
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE document_id = ?`,
+                  [JSON.stringify(payload), documentId]
+                );
+
+                await insertModuleActivity(pool, 'pmed', 'COMLAB_REPORT_VERIFIED', `${documentId} was verified by PMED.`, actor, 'comlab_report', documentId, {
+                  action: 'pmed_verify_report'
+                });
+              } else if (action === 'pmed_return_report') {
+                if (!(stage === 'verified_by_pmed' || status === 'acknowledged')) {
+                  writeJson(res, 409, { ok: false, message: 'Only PMED-verified reports can be returned to COMLAB.' });
+                  return;
+                }
+                workflow.stage = 'returned_to_comlab';
+                workflow.returned_to_comlab_at = nowIso;
+                if (notes) workflow.pmed_return_notes = notes;
+                payload.workflow = workflow;
+
+                await pool.query(
+                  `UPDATE ${comlabDocumentsRelation}
+                   SET status = 'received',
+                       payload = CAST(? AS jsonb),
+                       received_at = COALESCE(received_at, CURRENT_TIMESTAMP),
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE document_id = ?`,
+                  [JSON.stringify(payload), documentId]
+                );
+
+                await insertModuleActivity(pool, 'pmed', 'COMLAB_REPORT_RETURNED', `${documentId} was returned to COMLAB for confirmation.`, actor, 'comlab_report', documentId, {
+                  action: 'pmed_return_report'
+                });
+              }
+
+              writeJson(res, 200, { ok: true, data: await loadVerificationWorkspace() });
+              return;
+            }
+
+            writeJson(res, 405, { ok: false, message: 'Method not allowed for PMED COMLAB verification.' });
+            return;
           }
 
           if (url.pathname === '/api/pmed/planning') {
