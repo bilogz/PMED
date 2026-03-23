@@ -24,6 +24,7 @@ type DbPool = {
 type Pool = DbPool;
 
 let pgPool: DbPool | null = null;
+let performanceIndexesEnsured = false;
 
 const { Pool: PgPool, types: pgTypes } = pg;
 
@@ -162,6 +163,14 @@ function inferPatientType(input: {
 
 function currentDateString(): string {
   return toLocalIsoDate(new Date());
+}
+
+function nextDateString(value: string): string {
+  const [year, month, day] = value.split('-').map((part) => Number(part));
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return value;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
 }
 
 function toSqlDate(value: unknown): string | null {
@@ -368,6 +377,32 @@ async function getPool(options: SupabaseApiOptions): Promise<DbPool | null> {
 async function ensureModuleActivityLogsTable(_pool: DbPool): Promise<void> {
   // Supabase-only: tables come from `supabase/schema.sql`.
   return;
+}
+
+async function ensureSupabasePerformanceIndexes(pool: Pool): Promise<void> {
+  if (performanceIndexesEnsured) return;
+
+  const indexStatements = [
+    `CREATE INDEX IF NOT EXISTS idx_patient_appointments_date ON patient_appointments (appointment_date)`,
+    `CREATE INDEX IF NOT EXISTS idx_patient_appointments_status ON patient_appointments (status)`,
+    `CREATE INDEX IF NOT EXISTS idx_patient_appointments_updated_at ON patient_appointments (updated_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_patient_walkins_status ON patient_walkins (status)`,
+    `CREATE INDEX IF NOT EXISTS idx_patient_walkins_checkin_time ON patient_walkins (checkin_time)`,
+    `CREATE INDEX IF NOT EXISTS idx_patient_walkins_intake_time ON patient_walkins (intake_time)`,
+    `CREATE INDEX IF NOT EXISTS idx_patient_walkins_created_at ON patient_walkins (created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_checkup_visits_created_at ON checkup_visits (created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_checkup_visits_status_emergency ON checkup_visits (status, is_emergency)`,
+    `CREATE INDEX IF NOT EXISTS idx_mental_health_sessions_created_at ON mental_health_sessions (created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_mental_health_sessions_status_risk ON mental_health_sessions (status, risk_level)`,
+    `CREATE INDEX IF NOT EXISTS idx_pharmacy_dispense_requests_requested_at ON pharmacy_dispense_requests (requested_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_module_activity_logs_created_at ON module_activity_logs (created_at DESC)`
+  ];
+
+  for (const statement of indexStatements) {
+    await pool.query(statement);
+  }
+
+  performanceIndexesEnsured = true;
 }
 
 async function insertModuleActivity(
@@ -3715,6 +3750,13 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
             const reportingDepartmentKeys = ['clinic', 'cashier', 'guidance', 'prefect', 'comlab', 'crad', 'hr'];
             const reportingDepartmentNames = reportingDepartmentKeys
               .map((key) => findDepartmentIntegrationDefinition(key)?.name || key.toUpperCase());
+            const normalizeDepartmentKey = (value: string): string =>
+              findDepartmentIntegrationDefinition(value)?.key ||
+              toSafeText(value)
+                .toLowerCase()
+                .replace(/[\s-]+/g, '_');
+            const normalizeDepartmentName = (value: string): string =>
+              findDepartmentIntegrationDefinition(value)?.name || toSafeText(value);
 
             const normalizeDeliveryStatus = (explicitStatus?: string, archiveStatus?: string): string => {
               const normalizedExplicit = toSafeText(explicitStatus);
@@ -3762,26 +3804,47 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                     (await relationExists(pool, 'public.comlab_integration_record_types')) ? 'public.comlab_integration_record_types' :
                     (await relationExists(pool, 'comlab.integration_record_types')) ? 'comlab.integration_record_types' :
                     '';
+                  const comlabDepartmentsRelation =
+                    (await relationExists(pool, 'public.comlab_departments')) ? 'public.comlab_departments' :
+                    (await relationExists(pool, 'comlab.departments')) ? 'comlab.departments' :
+                    '';
 
-                  if (!comlabDocumentsRelation || !comlabMessageFeedRelation) {
+                  if (!comlabDocumentsRelation) {
                     return { reports: [] as Array<Record<string, unknown>>, activityLogs: [] as Array<Record<string, unknown>> };
                   }
 
                   const recordTypeJoin = comlabRecordTypesRelation
                     ? `LEFT JOIN ${comlabRecordTypesRelation} rt ON rt.record_type_id = d.record_type_id`
                     : '';
+                  const messageFeedJoin = comlabMessageFeedRelation
+                    ? `LEFT JOIN ${comlabMessageFeedRelation} mf ON mf.document_id = d.document_id`
+                    : '';
+                  const departmentsJoin = comlabDepartmentsRelation
+                    ? `LEFT JOIN ${comlabDepartmentsRelation} sd ON sd.department_id = d.sender_department_id
+                       LEFT JOIN ${comlabDepartmentsRelation} rd ON rd.department_id = d.receiver_department_id`
+                    : '';
 
                   const [rows] = await pool.query<RowDataPacket[]>(
                     `SELECT d.document_id, d.subject_ref, d.title, d.source_reference, d.status, d.payload,
                             d.sent_at, d.received_at, d.acknowledged_at, d.created_at,
-                            COALESCE(rt.record_type_code, mf.record_type_code) AS record_type_code,
-                            COALESCE(rt.record_type_name, mf.record_type_name) AS record_type_name,
-                            COALESCE(mf.sender_department, 'Computer Laboratory') AS sender_department
+                            COALESCE(rt.record_type_code, ${comlabMessageFeedRelation ? 'mf.record_type_code' : 'NULL'}) AS record_type_code,
+                            COALESCE(rt.record_type_name, ${comlabMessageFeedRelation ? 'mf.record_type_name' : 'NULL'}) AS record_type_name,
+                            COALESCE(${comlabMessageFeedRelation ? 'mf.sender_department' : 'NULL'}, ${comlabDepartmentsRelation ? 'sd.department_name' : 'NULL'}, 'Computer Laboratory') AS sender_department
                      FROM ${comlabDocumentsRelation} d
-                     LEFT JOIN ${comlabMessageFeedRelation} mf
-                       ON mf.document_id = d.document_id
+                     ${messageFeedJoin}
+                     ${departmentsJoin}
                      ${recordTypeJoin}
-                     WHERE LOWER(COALESCE(mf.receiver_department, '')) LIKE '%pmed%'
+                     WHERE LOWER(COALESCE(
+                       ${comlabMessageFeedRelation ? 'mf.receiver_department' : 'NULL'},
+                       ${comlabDepartmentsRelation ? 'rd.department_name' : 'NULL'},
+                       ${comlabDepartmentsRelation ? 'rd.department_code' : 'NULL'},
+                       d.payload->'target_department'->>'name',
+                       d.payload->'target_department'->>'code',
+                       d.payload->'target_department'->>'key',
+                       d.payload->'handoff'->>'receiver_department_code',
+                       d.payload->>'target_department',
+                       ''
+                     )) LIKE '%pmed%'
                      ORDER BY COALESCE(d.sent_at, d.created_at) DESC
                      LIMIT 24`
                   );
@@ -3972,7 +4035,9 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                 const internalReports = filteredEventRows.length
                   ? filteredEventRows.map((row, index) => {
                       const payload = parseJsonRecord(row.payload);
-                      const sourceDepartment = toSafeText(payload.source_department) || deriveSourceDepartment(toSafeText(row.source_module), toSafeText(payload.report_type), toSafeText(payload.report_name));
+                      const sourceDepartment = normalizeDepartmentName(
+                        toSafeText(payload.source_department) || deriveSourceDepartment(toSafeText(row.source_module), toSafeText(payload.report_type), toSafeText(payload.report_name))
+                      );
                       const deliveryStatus =
                         toSafeText(payload.delivery_status) ||
                         (toSafeText(payload.target_department).toLowerCase() === 'pmed'
@@ -4000,7 +4065,9 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                     })
                   : clearanceRows.map((row, index) => {
                       const metadata = parseJsonRecord(row.metadata);
-                      const sourceDepartment = toSafeText(metadata.source_department) || deriveSourceDepartment(toSafeText(row.department_key), toSafeText(metadata.report_type), toSafeText(metadata.report_name));
+                      const sourceDepartment = normalizeDepartmentName(
+                        toSafeText(metadata.source_department) || deriveSourceDepartment(toSafeText(row.department_key), toSafeText(metadata.report_type), toSafeText(metadata.report_name))
+                      );
                       const deliveryStatus = toSafeText(metadata.delivery_status) || (toSafeText(row.status).toLowerCase() === 'approved' ? 'Ready to Send' : 'Draft');
                       return {
                         id: toSafeText(metadata.report_reference || row.external_reference || row.clearance_reference || `RPT-${index + 1}`),
@@ -4025,8 +4092,12 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
 
                 const essentialDepartmentReports = reportingDepartmentNames.map((departmentName) => ({
                   departmentName,
-                  received: reports.some((item) => item.sourceDepartment === departmentName && ['Received', 'Ready to Send', 'Sent to Administration', 'Archived'].includes(item.deliveryStatus)),
-                  requested: reports.some((item) => item.sourceDepartment === departmentName)
+                  received: reports.some(
+                    (item) =>
+                      normalizeDepartmentKey(item.sourceDepartment) === normalizeDepartmentKey(departmentName) &&
+                      ['Received', 'Ready to Send', 'Sent to Administration', 'Archived'].includes(item.deliveryStatus)
+                  ),
+                  requested: reports.some((item) => normalizeDepartmentKey(item.sourceDepartment) === normalizeDepartmentKey(departmentName))
                 }));
                 const dispatchChecklist = [
                   { id: 1, label: 'Clinic report received', done: essentialDepartmentReports.find((item) => item.departmentName === 'Clinic')?.received ?? false },
@@ -4106,7 +4177,11 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
 
               const essentialDepartmentReports = reportingDepartmentNames.map((departmentName) => ({
                 departmentName,
-                received: reports.some((item) => item.sourceDepartment === departmentName && ['Received', 'Ready to Send', 'Sent to Administration', 'Archived'].includes(item.deliveryStatus))
+                received: reports.some(
+                  (item) =>
+                    normalizeDepartmentKey(item.sourceDepartment) === normalizeDepartmentKey(departmentName) &&
+                    ['Received', 'Ready to Send', 'Sent to Administration', 'Archived'].includes(item.deliveryStatus)
+                )
               }));
               const dispatchChecklist = [
                 { id: 1, label: 'Clinic report received', done: essentialDepartmentReports.find((item) => item.departmentName === 'Clinic')?.received ?? false },
@@ -6147,6 +6222,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
             await ensureMentalHealthTables(pool);
             await ensurePharmacyInventoryTables(pool);
             await ensurePatientMasterTables(pool);
+            await ensureSupabasePerformanceIndexes(pool);
 
             const requestedFrom = toSqlDate(url.searchParams.get('from')) || '';
             const requestedTo = toSqlDate(url.searchParams.get('to')) || '';
@@ -6156,6 +6232,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
             defaultFromDate.setDate(defaultFromDate.getDate() - 29);
             const fromDate = requestedFrom || defaultFromDate.toISOString().slice(0, 10);
             const toDate = requestedTo || defaultTo;
+            const toDateExclusive = nextDateString(toDate);
             const trendDays = buildDateSeries(fromDate, toDate);
             const trendMap = new Map(trendDays.map((day) => [day, { day, appointments: 0, walkin: 0, checkup: 0, mental: 0, pharmacy: 0 }]));
 
@@ -6166,47 +6243,47 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
             const [appointmentsRows] = await pool.query<RowDataPacket[]>(
               `SELECT COUNT(*) AS total, SUM(CASE WHEN LOWER(COALESCE(status, '')) IN ('pending', 'new') THEN 1 ELSE 0 END) AS pending
                FROM patient_appointments
-               WHERE appointment_date BETWEEN ? AND ?`,
-              [fromDate, toDate]
+               WHERE appointment_date >= ? AND appointment_date < ?`,
+              [fromDate, toDateExclusive]
             );
             const [walkinRows] = await pool.query<RowDataPacket[]>(
               `SELECT COUNT(*) AS total,
                       SUM(CASE WHEN LOWER(COALESCE(status, '')) = 'emergency' OR LOWER(COALESCE(severity, '')) = 'emergency' THEN 1 ELSE 0 END) AS emergency
                FROM patient_walkins
-               WHERE DATE(COALESCE(checkin_time, intake_time, created_at)) BETWEEN ? AND ?`,
-              [fromDate, toDate]
+               WHERE COALESCE(checkin_time, intake_time, created_at) >= ? AND COALESCE(checkin_time, intake_time, created_at) < ?`,
+              [fromDate, toDateExclusive]
             );
             const [checkupRows] = await pool.query<RowDataPacket[]>(
               `SELECT COUNT(*) AS total,
                       SUM(CASE WHEN LOWER(COALESCE(status, '')) = 'in_consultation' THEN 1 ELSE 0 END) AS in_consultation
                FROM checkup_visits
-               WHERE DATE(created_at) BETWEEN ? AND ?`,
-              [fromDate, toDate]
+               WHERE created_at >= ? AND created_at < ?`,
+              [fromDate, toDateExclusive]
             );
             const [mentalRows] = await pool.query<RowDataPacket[]>(
               `SELECT COUNT(*) AS total,
                       SUM(CASE WHEN LOWER(COALESCE(risk_level, '')) = 'high' OR LOWER(COALESCE(status, '')) IN ('at_risk', 'escalated') THEN 1 ELSE 0 END) AS at_risk
                FROM mental_health_sessions
-               WHERE DATE(created_at) BETWEEN ? AND ?`,
-              [fromDate, toDate]
+               WHERE created_at >= ? AND created_at < ?`,
+              [fromDate, toDateExclusive]
             );
             const [pharmacyRows] = await pool.query<RowDataPacket[]>(
               `SELECT COUNT(*) AS total
                FROM pharmacy_dispense_requests
-               WHERE DATE(requested_at) BETWEEN ? AND ?`,
-              [fromDate, toDate]
+               WHERE requested_at >= ? AND requested_at < ?`,
+              [fromDate, toDateExclusive]
             );
 
             const trendQueries: Array<[string, string, 'appointments' | 'walkin' | 'checkup' | 'mental' | 'pharmacy']> = [
-              [`SELECT DATE_FORMAT(appointment_date, '%Y-%m-%d') AS day, COUNT(*) AS total FROM patient_appointments WHERE appointment_date BETWEEN ? AND ? GROUP BY DATE_FORMAT(appointment_date, '%Y-%m-%d')`, 'appointments', 'appointments'],
-              [`SELECT DATE_FORMAT(DATE(COALESCE(checkin_time, intake_time, created_at)), '%Y-%m-%d') AS day, COUNT(*) AS total FROM patient_walkins WHERE DATE(COALESCE(checkin_time, intake_time, created_at)) BETWEEN ? AND ? GROUP BY DATE_FORMAT(DATE(COALESCE(checkin_time, intake_time, created_at)), '%Y-%m-%d')`, 'walkin', 'walkin'],
-              [`SELECT DATE_FORMAT(DATE(created_at), '%Y-%m-%d') AS day, COUNT(*) AS total FROM checkup_visits WHERE DATE(created_at) BETWEEN ? AND ? GROUP BY DATE_FORMAT(DATE(created_at), '%Y-%m-%d')`, 'checkup', 'checkup'],
-              [`SELECT DATE_FORMAT(DATE(created_at), '%Y-%m-%d') AS day, COUNT(*) AS total FROM mental_health_sessions WHERE DATE(created_at) BETWEEN ? AND ? GROUP BY DATE_FORMAT(DATE(created_at), '%Y-%m-%d')`, 'mental', 'mental'],
-              [`SELECT DATE_FORMAT(DATE(requested_at), '%Y-%m-%d') AS day, COUNT(*) AS total FROM pharmacy_dispense_requests WHERE DATE(requested_at) BETWEEN ? AND ? GROUP BY DATE_FORMAT(DATE(requested_at), '%Y-%m-%d')`, 'pharmacy', 'pharmacy']
+              [`SELECT to_char(appointment_date::date, 'YYYY-MM-DD') AS day, COUNT(*) AS total FROM patient_appointments WHERE appointment_date >= ? AND appointment_date < ? GROUP BY 1`, 'appointments', 'appointments'],
+              [`SELECT to_char(date_trunc('day', COALESCE(checkin_time, intake_time, created_at)), 'YYYY-MM-DD') AS day, COUNT(*) AS total FROM patient_walkins WHERE COALESCE(checkin_time, intake_time, created_at) >= ? AND COALESCE(checkin_time, intake_time, created_at) < ? GROUP BY 1`, 'walkin', 'walkin'],
+              [`SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, COUNT(*) AS total FROM checkup_visits WHERE created_at >= ? AND created_at < ? GROUP BY 1`, 'checkup', 'checkup'],
+              [`SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day, COUNT(*) AS total FROM mental_health_sessions WHERE created_at >= ? AND created_at < ? GROUP BY 1`, 'mental', 'mental'],
+              [`SELECT to_char(date_trunc('day', requested_at), 'YYYY-MM-DD') AS day, COUNT(*) AS total FROM pharmacy_dispense_requests WHERE requested_at >= ? AND requested_at < ? GROUP BY 1`, 'pharmacy', 'pharmacy']
             ];
 
             for (const [query, , metricKey] of trendQueries) {
-              const [trendRows] = await pool.query<RowDataPacket[]>(query, [fromDate, toDate]);
+              const [trendRows] = await pool.query<RowDataPacket[]>(query, [fromDate, toDateExclusive]);
               for (const row of trendRows) {
                 const bucket = trendMap.get(String(row.day || ''));
                 if (bucket) bucket[metricKey] = Number(row.total || 0);
@@ -6256,6 +6333,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
           if (url.pathname === '/api/dashboard' && (req.method || 'GET').toUpperCase() === 'GET') {
             await ensurePatientAppointmentsTable(pool);
             await ensurePatientMasterTables(pool);
+            await ensureSupabasePerformanceIndexes(pool);
 
             const [summaryRows] = await pool.query<RowDataPacket[]>(
               `SELECT
@@ -6263,7 +6341,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                  (SELECT COUNT(*) FROM patient_appointments) AS total_appointments,
                  (SELECT COUNT(*) FROM patient_appointments WHERE appointment_date = CURDATE()) AS today_appointments,
                  (SELECT COUNT(*) FROM patient_appointments WHERE LOWER(COALESCE(status, '')) IN ('pending', 'new', 'awaiting')) AS pending_appointments,
-                 (SELECT COUNT(*) FROM patient_appointments WHERE LOWER(COALESCE(status, '')) = 'completed' AND DATE(updated_at) = CURDATE()) AS completed_today,
+                 (SELECT COUNT(*) FROM patient_appointments WHERE LOWER(COALESCE(status, '')) = 'completed' AND updated_at >= CURRENT_DATE AND updated_at < CURRENT_DATE + INTERVAL '1 day') AS completed_today,
                  (SELECT COUNT(*) FROM patient_master WHERE created_at >= DATE_FORMAT(CURDATE(), '%Y-%m-01')) AS new_patients_month`
             );
             const summary = summaryRows[0] || {};
@@ -6271,10 +6349,10 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
             const monthSeries = buildRecentMonthSeries(6);
             const monthCounts = new Map(monthSeries.map((item) => [item.key, 0]));
             const [trendRows] = await pool.query<RowDataPacket[]>(
-              `SELECT DATE_FORMAT(appointment_date, '%b') AS label, LOWER(DATE_FORMAT(appointment_date, '%b')) AS month_key, COUNT(*) AS total
+              `SELECT to_char(appointment_date, 'Mon') AS label, LOWER(to_char(appointment_date, 'Mon')) AS month_key, COUNT(*) AS total
                FROM patient_appointments
                WHERE appointment_date >= ? AND appointment_date < ?
-               GROUP BY DATE_FORMAT(appointment_date, '%Y-%m'), DATE_FORMAT(appointment_date, '%b')
+               GROUP BY to_char(appointment_date, 'YYYY-MM'), to_char(appointment_date, 'Mon')
                ORDER BY MIN(appointment_date)`,
               [monthSeries[0]?.start || currentDateString(), monthSeries[monthSeries.length - 1]?.end || currentDateString()]
             );
@@ -6910,6 +6988,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
               const doctor = toSafeText(url.searchParams.get('doctor')).toLowerCase();
               const fromDate = toSqlDate(url.searchParams.get('fromDate'));
               const toDate = toSqlDate(url.searchParams.get('toDate'));
+              const toDateExclusive = toDate ? nextDateString(toDate) : null;
               const where: string[] = [];
               const params: unknown[] = [];
               if (search) {
@@ -6935,12 +7014,12 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
                 params.push(doctor);
               }
               if (fromDate) {
-                where.push('DATE(requested_at) >= ?');
+                where.push('requested_at >= ?');
                 params.push(fromDate);
               }
-              if (toDate) {
-                where.push('DATE(requested_at) <= ?');
-                params.push(toDate);
+              if (toDateExclusive) {
+                where.push('requested_at < ?');
+                params.push(toDateExclusive);
               }
               const [rows] = await pool.query<RowDataPacket[]>(
                 `SELECT request_id, visit_id, patient_id, patient_name, patient_type, category, priority, status, requested_at, requested_by_doctor
