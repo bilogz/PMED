@@ -10,6 +10,7 @@ import {
   mdiCogOutline,
   mdiDatabaseOutline,
   mdiFileChartOutline,
+  mdiHospitalBoxOutline,
   mdiLogout,
   mdiViewDashboardOutline
 } from '@mdi/js';
@@ -79,6 +80,14 @@ const sidebarItem: menu[] = [
     title: 'COMLAB Verify',
     icon: mdiClipboardCheckOutline,
     to: '/pmed/comlab-report-verification'
+  },
+  {
+    title: 'Clinic Health Reports',
+    icon: mdiHospitalBoxOutline,
+    to: '/pmed/clinic-health-reports',
+    chip: 'Clinic',
+    chipColor: 'error',
+    chipVariant: 'flat'
   },
   {
     title: 'Request staff (HR)',

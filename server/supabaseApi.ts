@@ -2323,7 +2323,7 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
         const pool = await getPool(options);
         const url = new URL(req.url || '', 'http://localhost');
 
-        if (!pool || !['/api/appointments', '/api/doctors', '/api/doctor-availability', '/api/registrations', '/api/walk-ins', '/api/checkups', '/api/laboratory', '/api/pharmacy', '/api/mental-health', '/api/patients', '/api/admin-auth', '/api/admin-profile', '/api/module-activity', '/api/reports', '/api/dashboard', '/api/pmed/planning', '/api/pmed/data-collection', '/api/pmed/monitoring', '/api/pmed/evaluation', '/api/pmed/reporting', '/api/pmed/reporting-debug', '/api/pmed/enrollment-statistics', '/api/pmed/exchange-board', '/api/pmed/comlab-report-verification', '/api/integrations/cashier/status', '/api/integrations/cashier/queue', '/api/integrations/cashier/sync', '/api/integrations/cashier/payment-status', '/api/integrations/departments/map', '/api/integrations/departments/records'].includes(url.pathname)) {
+        if (!pool || !['/api/appointments', '/api/doctors', '/api/doctor-availability', '/api/registrations', '/api/walk-ins', '/api/checkups', '/api/laboratory', '/api/pharmacy', '/api/mental-health', '/api/patients', '/api/admin-auth', '/api/admin-profile', '/api/module-activity', '/api/reports', '/api/dashboard', '/api/pmed/planning', '/api/pmed/data-collection', '/api/pmed/monitoring', '/api/pmed/evaluation', '/api/pmed/reporting', '/api/pmed/reporting-debug', '/api/pmed/enrollment-statistics', '/api/pmed/exchange-board', '/api/pmed/comlab-report-verification', '/api/pmed/clinic-health-reports', '/api/integrations/cashier/status', '/api/integrations/cashier/queue', '/api/integrations/cashier/sync', '/api/integrations/cashier/payment-status', '/api/integrations/departments/map', '/api/integrations/departments/records'].includes(url.pathname)) {
           next();
           return;
         }
@@ -8598,6 +8598,163 @@ export function supabaseApiPlugin(options: SupabaseApiOptions): Plugin {
               return;
             }
           }
+
+          // ── PMED: Clinic Health Reports Inbox ─────────────────────────────────
+          if (url.pathname === '/api/pmed/clinic-health-reports' && (req.method || 'GET').toUpperCase() === 'GET') {
+            await ensureModuleActivityLogsTable(pool);
+
+            const search = toSafeText(url.searchParams.get('search'));
+            const severity = toSafeText(url.searchParams.get('severity'));
+            const studentType = toSafeText(url.searchParams.get('student_type'));
+            const page = Math.max(1, toSafeInt(url.searchParams.get('page'), 1));
+            const perPage = Math.min(50, Math.max(1, toSafeInt(url.searchParams.get('per_page'), 20)));
+            const offset = (page - 1) * perPage;
+
+            // Try direct table read first (same Supabase DB — fastest path)
+            const tableExists = await relationExists(pool, 'public.clinic_health_reports') ||
+              await relationExists(pool, 'clinic.clinic_health_reports');
+            const tableRef = (await relationExists(pool, 'clinic.clinic_health_reports'))
+              ? 'clinic.clinic_health_reports'
+              : 'public.clinic_health_reports';
+
+            if (tableExists) {
+              const where: string[] = [];
+              const params: unknown[] = [];
+
+              if (search) {
+                where.push(`(LOWER(student_name) LIKE ? OR LOWER(COALESCE(student_id,'')) LIKE ? OR LOWER(health_issue) LIKE ? OR LOWER(COALESCE(symptoms,'')) LIKE ?)`);
+                const q = `%${search.toLowerCase()}%`;
+                params.push(q, q, q, q);
+              }
+              if (severity) {
+                where.push(`severity = ?`);
+                params.push(severity.toLowerCase());
+              }
+              if (studentType) {
+                where.push(`student_type = ?`);
+                params.push(studentType.toLowerCase());
+              }
+
+              const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+              const [countRows] = await pool.query<RowDataPacket[]>(
+                `SELECT COUNT(*) AS total FROM ${tableRef} ${whereClause}`,
+                params
+              );
+              const total = Number(countRows[0]?.total ?? 0);
+
+              const [rows] = await pool.query<RowDataPacket[]>(
+                `SELECT id, report_code, student_id, student_name, student_type, grade_section,
+                        age, sex, health_issue, symptoms, severity, treatment_given,
+                        medicines_used, first_aid_given, attending_staff, remarks,
+                        sent_to_pmed, pmed_sent_at, pmed_entity_key, created_at, updated_at
+                 FROM ${tableRef} ${whereClause}
+                 ORDER BY created_at DESC
+                 LIMIT ? OFFSET ?`,
+                [...params, perPage, offset]
+              );
+
+              writeJson(res, 200, {
+                ok: true,
+                source: 'clinic_health_reports_table',
+                data: {
+                  items: rows.map((r) => ({
+                    id: Number(r.id),
+                    reportCode: String(r.report_code || ''),
+                    studentId: String(r.student_id || ''),
+                    studentName: String(r.student_name || ''),
+                    studentType: String(r.student_type || 'student'),
+                    gradeSection: String(r.grade_section || ''),
+                    age: r.age !== null ? Number(r.age) : null,
+                    sex: String(r.sex || ''),
+                    healthIssue: String(r.health_issue || ''),
+                    symptoms: String(r.symptoms || ''),
+                    severity: String(r.severity || 'low'),
+                    treatmentGiven: String(r.treatment_given || ''),
+                    medicinesUsed: Array.isArray(r.medicines_used) ? r.medicines_used : parseJsonRecord(r.medicines_used),
+                    firstAidGiven: String(r.first_aid_given || ''),
+                    attendingStaff: String(r.attending_staff || ''),
+                    remarks: String(r.remarks || ''),
+                    sentToPmed: Number(r.sent_to_pmed) === 1,
+                    pmedSentAt: r.pmed_sent_at ? formatDateTimeCell(r.pmed_sent_at) : null,
+                    pmedEntityKey: String(r.pmed_entity_key || ''),
+                    createdAt: formatDateTimeCell(r.created_at),
+                    updatedAt: formatDateTimeCell(r.updated_at)
+                  })),
+                  meta: { page, perPage, total, totalPages: Math.max(1, Math.ceil(total / perPage)) }
+                }
+              });
+              return;
+            }
+
+            // Fallback: read from module_activity_logs (populated by clinic when it sends reports)
+            const activityWhere: string[] = [
+              `module = 'pmed'`,
+              `action = 'CLINIC_HEALTH_REPORT_RECEIVED'`
+            ];
+            const activityParams: unknown[] = [];
+
+            if (search) {
+              activityWhere.push(`(LOWER(detail) LIKE ? OR LOWER(COALESCE(entity_key,'')) LIKE ?)`);
+              const q = `%${search.toLowerCase()}%`;
+              activityParams.push(q, q);
+            }
+            if (severity) {
+              activityWhere.push(`LOWER(COALESCE(metadata->>'severity', '')) = ?`);
+              activityParams.push(severity.toLowerCase());
+            }
+
+            const activityWhereSql = `WHERE ${activityWhere.join(' AND ')}`;
+            const [countRows] = await pool.query<RowDataPacket[]>(
+              `SELECT COUNT(*) AS total FROM module_activity_logs ${activityWhereSql}`,
+              activityParams
+            );
+            const total = Number(countRows[0]?.total ?? 0);
+
+            const [rows] = await pool.query<RowDataPacket[]>(
+              `SELECT id, action, detail, actor, entity_key, metadata, created_at
+               FROM module_activity_logs ${activityWhereSql}
+               ORDER BY created_at DESC
+               LIMIT ? OFFSET ?`,
+              [...activityParams, perPage, offset]
+            );
+
+            writeJson(res, 200, {
+              ok: true,
+              source: 'module_activity_logs_fallback',
+              data: {
+                items: rows.map((r) => {
+                  const meta = parseJsonRecord(r.metadata);
+                  return {
+                    id: Number(r.id),
+                    reportCode: String(meta.report_code || r.entity_key || ''),
+                    studentId: String(meta.student_id || ''),
+                    studentName: String(meta.student_name || ''),
+                    studentType: String(meta.student_type || 'student'),
+                    gradeSection: String(meta.grade_section || ''),
+                    age: meta.age !== undefined ? meta.age : null,
+                    sex: String(meta.sex || ''),
+                    healthIssue: String(meta.health_issue || r.detail || ''),
+                    symptoms: String(meta.symptoms || ''),
+                    severity: String(meta.severity || 'low'),
+                    treatmentGiven: String(meta.treatment_given || ''),
+                    medicinesUsed: Array.isArray(meta.medicines_used) ? meta.medicines_used : [],
+                    firstAidGiven: String(meta.first_aid_given || ''),
+                    attendingStaff: String(meta.attending_staff || r.actor || ''),
+                    remarks: String(meta.remarks || ''),
+                    sentToPmed: true,
+                    pmedSentAt: formatDateTimeCell(r.created_at),
+                    pmedEntityKey: String(r.entity_key || ''),
+                    createdAt: formatDateTimeCell(r.created_at),
+                    updatedAt: formatDateTimeCell(r.created_at)
+                  };
+                }),
+                meta: { page, perPage, total, totalPages: Math.max(1, Math.ceil(total / perPage)) }
+              }
+            });
+            return;
+          }
+          // ── End PMED Clinic Health Reports ─────────────────────────────────────
 
           next();
         } catch (error) {

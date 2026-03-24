@@ -99,7 +99,17 @@ const PMED_ROUTES = [
     }
   },
   {
-    path: '/pmed/:pmedModule(planning|data-collection|monitoring|evaluation|reporting|enrollment-statistics|exchange-board|hr-staff-request|comlab-report-verification)/:pathMatch(.*)*',
+    name: 'PMED Clinic Health Reports',
+    path: '/pmed/clinic-health-reports',
+    component: () => import('@/views/pmed/ClinicHealthReportsPage.vue'),
+    meta: {
+      title: 'Clinic Health Reports',
+      subtitle: 'Student health issues from Clinic',
+      description: 'View student and patient health issue reports sent by the Clinic, including medicines and first aid used.'
+    }
+  },
+  {
+    path: '/pmed/:pmedModule(planning|data-collection|monitoring|evaluation|reporting|enrollment-statistics|exchange-board|hr-staff-request|comlab-report-verification|clinic-health-reports)/:pathMatch(.*)*',
     redirect: (to: any) => `/pmed/${String(to.params.pmedModule || 'planning')}`
   },
   {
